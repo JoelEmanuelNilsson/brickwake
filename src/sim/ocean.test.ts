@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { gerstnerPoint, makeSea, sampleOcean, seas, swell, waveAngularFrequency } from "./ocean.ts"
+import { gerstnerPoint, makeSea, oceanHeight, sampleOcean, seas, swell, waveAngularFrequency } from "./ocean.ts"
 import { length } from "./vector.ts"
 
 const points = Array.from({ length: 40 }, (_, i) => ({ x: Math.sin(i * 12.9898) * 400, z: Math.cos(i * 78.233) * 400, t: i * 3.7 }))
@@ -50,4 +50,10 @@ test("the match sea is heavy swell: crests over a metre, periods of several seco
 
 test("a sea whose crests would loop over is rejected", () => {
   expect(() => makeSea([{ direction: 0, wavelength: 20, amplitude: 4, sharpness: 1, phase: 0 }])).toThrow()
+})
+
+test("oceanHeight is sampleOcean's height", () => {
+  for (const sea of [seas.calm, seas.open, swell(1)]) {
+    for (const { x, z, t } of points) expect(oceanHeight(sea, x, z, t)).toBe(sampleOcean(sea, x, z, t).height)
+  }
 })

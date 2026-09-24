@@ -19,6 +19,10 @@ export class ShipPose {
   sailSet = 0
   rudder: ShipSnapshot["rudder"] = 0
   sail: ShipSnapshot["sail"] = 0
+  hp = 0
+  /** Sim time, seconds, from which each side may fire again. */
+  reloadPort = 0
+  reloadStarboard = 0
 }
 
 interface Entry {
@@ -137,6 +141,9 @@ const write = (out: ShipPose, a: ShipSnapshot, b: ShipSnapshot, u: number) => {
   out.sailSet = lerp(a.sailSet, b.sailSet, u)
   out.rudder = b.rudder
   out.sail = b.sail
+  out.hp = b.hp
+  out.reloadPort = b.reloadedAt[0]
+  out.reloadStarboard = b.reloadedAt[1]
   // Normalized lerp on the shorter arc: ticks are 33 ms apart, where it matches slerp to well under a pixel.
   const [ax, ay, az, aw] = a.orientation
   const [bx0, by0, bz0, bw0] = b.orientation

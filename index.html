@@ -79,15 +79,41 @@
       .hud-rudder-centre { position: absolute; left: 50%; top: 3px; bottom: 3px; width: 1px; background: var(--dim); }
       .hud-rudder-needle { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 4px; margin-left: -2px; border-radius: 2px; background: var(--gold); box-shadow: 0 0 6px rgba(233, 180, 76, 0.7); }
       .hud-rudder-sides { display: flex; justify-content: space-between; margin-top: 5px; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); }
+
+      #reticle {
+        position: fixed; left: 50%; top: 50%; width: 64px; height: 64px; margin: -32px 0 0 -32px;
+        pointer-events: none; user-select: none; color: var(--gold); --tone: var(--gold);
+      }
+      #reticle[hidden] { display: none; }
+      #reticle[data-state="reloading"] { --tone: var(--ink); }
+      #reticle[data-state="out-of-arc"], #reticle[data-state="out-of-range"], #reticle[data-state="no-aim"] { --tone: #e36b4f; }
+      .reticle-ring, .reticle-hit { position: absolute; inset: 0; overflow: visible; filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.7)); }
+      .reticle-track { fill: none; stroke: rgba(243, 233, 214, 0.22); stroke-width: 2; }
+      .reticle-load { fill: none; stroke: var(--tone); stroke-width: 2.5; stroke-linecap: round; transition: stroke 120ms; }
+      .reticle-ticks { stroke: var(--tone); stroke-width: 2; stroke-linecap: round; }
+      .reticle-dot { fill: var(--tone); }
+      .reticle-hit { opacity: 0; }
+      .reticle-hit path { stroke: #fff4e0; stroke-width: 3.2; stroke-linecap: round; }
+      .reticle-hit.show { animation: hitmark 420ms ease-out; }
+      @keyframes hitmark { 0% { opacity: 1; transform: scale(1.35); } 30% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(1.1); } }
+      .reticle-side, .reticle-status {
+        position: absolute; left: 50%; transform: translateX(-50%); white-space: nowrap; font-variant-numeric: tabular-nums;
+        text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85); letter-spacing: 0.24em; text-transform: uppercase;
+      }
+      .reticle-side { top: -26px; font-size: 11px; color: var(--dim); }
+      .reticle-status { top: 72px; font-size: 13px; color: var(--tone); }
+      #reticle.denied { animation: deny 260ms ease-in-out; }
+      @keyframes deny { 20%, 60% { transform: translateX(-6px); } 40%, 80% { transform: translateX(6px); } }
     </style>
   </head>
   <body>
     <canvas id="scene"></canvas>
     <div id="hud" hidden></div>
+    <div id="reticle" hidden></div>
     <div id="overlay" data-state="connecting">
       <h1>BRICKWAKE</h1>
       <div class="overlay-hint">Click to set sail</div>
-      <div class="overlay-keys">W / S sail · A / D rudder · mouse to look · wheel to zoom</div>
+      <div class="overlay-keys">W / S sail · A / D rudder · mouse to look and aim · click to fire · wheel to zoom</div>
     </div>
     <div id="status"></div>
     <script type="module" src="/src/client/main.ts"></script>
