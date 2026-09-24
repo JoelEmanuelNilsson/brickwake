@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test"
 import { InstancedMesh, Matrix4, Vector3 } from "three"
 import { type BrickPlacement, BrickShipMesh, createBrickLibrary } from "./brick-ship-mesh.ts"
-import { type PartId, buildPartGeometry, gridMatrix, partIds, partShapes } from "./parts.ts"
+import { type PartId, partCatalog, partIds } from "../../sim/ship/parts.ts"
+import { buildPartGeometry, gridMatrix } from "./parts.ts"
 
 const library = createBrickLibrary()
 
@@ -25,9 +26,9 @@ test("every part shape is closed with outward faces and fits its footprint", () 
   for (const part of partIds) {
     expect({ part, outward: signedVolume(part) > 0 }).toEqual({ part, outward: true })
     const box = buildPartGeometry(part).boundingBox
-    const [sx, sz] = partShapes[part].size
+    const [sx, sz] = partCatalog[part].size
     expect(box).not.toBeNull()
-    if (box === null || partShapes[part].overhangs) continue
+    if (box === null || partCatalog[part].overhangs) continue
     expect(box.max.x - box.min.x).toBeLessThanOrEqual(sx * 0.4 + 1e-6)
     expect(box.max.z - box.min.z).toBeLessThanOrEqual(sz * 0.4 + 1e-6)
   }

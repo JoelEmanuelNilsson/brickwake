@@ -1,6 +1,7 @@
 import type { BrickPlacement } from "../bricks/brick-ship-mesh.ts"
-import type { BrickColor } from "../bricks/colors.ts"
-import { gridMatrix, ldu, type PartId, partIds, partShapes } from "../bricks/parts.ts"
+import type { BrickColor } from "../../sim/ship/colors.ts"
+import { ldu, type PartId, partCatalog, partIds } from "../../sim/ship/parts.ts"
+import { gridMatrix } from "../bricks/parts.ts"
 
 interface Placed {
   readonly part: PartId
@@ -91,7 +92,7 @@ export const buildSampler = (): Array<BrickPlacement> => {
   let z = 5
   let rowDepth = 0
   showcase.forEach((part, i) => {
-    const [sx, sz] = partShapes[part].size
+    const [sx, sz] = partCatalog[part].size
     const turns = part === "2527c01" ? 3 : 0
     const [fx, fz] = turns % 2 === 1 ? [sz, sx] : [sx, sz]
     if (x + fx > samplerSize.x - 3) {
@@ -116,7 +117,7 @@ export const buildSampler = (): Array<BrickPlacement> => {
 }
 
 const footprint = ({ part, turns }: Placed) => {
-  const [sx, sz] = partShapes[part].size
+  const [sx, sz] = partCatalog[part].size
   return turns % 2 === 1 ? [sz, sx] : [sx, sz]
 }
 
@@ -130,7 +131,7 @@ const resolveStuds = (placed: ReadonlyArray<Placed>): Array<BrickPlacement> => {
     const [fx = 1, fz = 1] = footprint(p)
     const cx = p.x + fx / 2
     const cz = p.z + fz / 2
-    const shape = partShapes[p.part]
+    const shape = partCatalog[p.part]
     const top = p.y + Math.round(shape.height / ldu.plate)
     const angle = (p.turns * Math.PI) / 2
     const hiddenStuds = shape.studs.flatMap(([sx, , sz], s) => {

@@ -1,0 +1,137 @@
+import { galleonGunSpec, type GunLayoutSpec } from "../gun-layout.ts"
+import type { BrickColor } from "./colors.ts"
+
+/** A piecewise-linear curve as [input, output] points with increasing inputs; clamped at both ends. */
+export type Curve = ReadonlyArray<readonly [number, number]>
+
+/** One colour band of the hull side, bottom up; `share`d mottle colours replace some of its parts. */
+export interface Strake {
+  /** Band ends below this sheer-relative plate height. */
+  readonly below: number
+  readonly color: BrickColor
+  readonly mottle?: ReadonlyArray<{ readonly color: BrickColor; readonly share: number }>
+}
+
+/** A raised part of the hull with its own walls: stern castle or forecastle. */
+export interface Castle {
+  /** Stud x range from the stern, [from, to). */
+  readonly from: number
+  readonly to: number
+  /** Plate height its walls end below. */
+  readonly top: number
+}
+
+/** A deck: a plate course of beams across the ship under a plate course of planks along it. */
+export interface Deck {
+  readonly beams: number
+  readonly planks: number
+  /** Studded plates, or tiles where nothing is built on the deck and studs would only cost triangles. */
+  readonly surface: "plates" | "tiles"
+  /** Stud x range from the stern, [from, to). */
+  readonly from: number
+  readonly to: number
+}
+
+/**
+ * One ship class as data. Grid units: x in studs from the stern (bow +x), z in studs from the
+ * centreline (starboard +z), heights in plates from the keel bottom. Heights along the hull are
+ * sampled at course centres, so every curve is read at brick-grid resolution.
+ */
+export interface ShipSpec {
+  /** Stud x of the ship-local origin. */
+  readonly midship: number
+  /** Plate height of the design waterline (ship-local y = 0). */
+  readonly waterline: number
+  /** Hull wall thickness in studs. */
+  readonly shell: number
+  /** Course heights of the body from the keel up; bow columns (x ≥ `bowFrom`) are all plates. */
+  readonly courses: ReadonlyArray<"brick" | "plate">
+  /** Stud x where plate-by-plate bow courses start, so wedge plates can smooth the plan curve. */
+  readonly bowFrom: number
+  /** Half-breadth in studs by stud x, at full section and the waterline. */
+  readonly plan: Curve
+  /** Half-breadth factor by plate height: narrow keel, full sides, tumblehome at the rail. */
+  readonly section: Curve
+  /** Keel bottom plate height by stud x (rises into the forefoot). */
+  readonly keel: Curve
+  /** Studs the bow profile moves forward per plate above the waterline (stem rake). */
+  readonly stemRake: number
+  /** Stud x of the flat transom at the waterline, and studs it moves aft per plate above it (the stern's overhang). */
+  readonly transom: { readonly x: number; readonly rake: number }
+  /** Plates the strakes and rail rise by stud x. */
+  readonly sheer: Curve
+  /** Plate height the waist bulwark ends below, before sheer. */
+  readonly rail: number
+  readonly castles: ReadonlyArray<Castle>
+  readonly decks: ReadonlyArray<Deck>
+  readonly deckColor: BrickColor
+  readonly deckMottle: ReadonlyArray<{ readonly color: BrickColor; readonly share: number }>
+  /** Hull side colours by sheer-relative plate height, bottom up; the last band runs to the top. */
+  readonly strakes: ReadonlyArray<Strake>
+  /** The gun layout the gunports are carved for, in ship-local metres. */
+  readonly guns: GunLayoutSpec
+  /** Gunport opening size: width in studs, height in plates. */
+  readonly port: { readonly width: number; readonly height: number }
+  /** Accepted part count, [min, max]. */
+  readonly partRange: readonly [number, number]
+}
+
+const black = [{ color: "darkRed", share: 0.07 }] as const
+const red = [{ color: "black", share: 0.08 }] as const
+
+/** The pirate galleon: ~28 m, two gun decks, stern castle and forecastle, strakes of ref-01. */
+export const galleonSpec: ShipSpec = {
+  midship: 35,
+  waterline: 13,
+  shell: 2,
+  courses: [
+    "brick", "brick", "brick", "brick", "plate", // 0–13 bottom, to the waterline
+    "brick", "plate", "plate", // 13–18 wale, gold line, lower gun deck
+    "brick", "brick", "plate", // 18–25 lower gunports, gold line
+    "brick", "plate", "plate", "plate", // 25–31 red band, gold line, upper gun deck
+    "brick", "brick", "plate", // 31–38 upper gunports, gold line
+    "brick", "plate", "plate", // 38–43 red rail, gold cap, quarterdeck and forecastle
+    "brick", "plate", "plate", "plate", // 43–49 castle walls, gold cap, poop deck
+    "brick", "plate", // 49–53 poop walls, gold cap
+  ],
+  bowFrom: 51,
+  plan: [[0, 8.6], [3, 9.3], [6, 9.8], [8.5, 10], [50, 10], [53.5, 9.8], [56.9, 9.17], [59.5, 8.35], [62.1, 7.14], [63.8, 6], [65.6, 4.36], [66.4, 3.12], [66.8, 2.4], [67.3, 0]],
+  section: [[1.5, 0.65], [4.5, 0.75], [7.5, 0.85], [10.5, 0.95], [12.5, 1], [24.5, 1], [25.5, 0.9], [37.5, 0.9], [38.5, 0.8], [60, 0.8]],
+  keel: [[0, 1], [5, 0], [46, 0], [52, 1], [57, 3], [61, 5.5], [63.5, 9], [65, 13]],
+  stemRake: 0.12,
+  transom: { x: 4, rake: 0.1 },
+  sheer: [[0, 0], [50, 0], [58, 1], [63, 2], [68, 4]],
+  rail: 42,
+  castles: [
+    { from: 0, to: 22, top: 47 },
+    { from: 0, to: 11, top: 53 },
+    { from: 57, to: 99, top: 47 },
+  ],
+  decks: [
+    { beams: 16, planks: 17, surface: "tiles", from: 0, to: 99 },
+    { beams: 29, planks: 30, surface: "plates", from: 0, to: 99 },
+    { beams: 41, planks: 42, surface: "plates", from: 0, to: 22 },
+    { beams: 47, planks: 48, surface: "plates", from: 0, to: 11 },
+    { beams: 41, planks: 42, surface: "plates", from: 57, to: 99 },
+  ],
+  deckColor: "reddishBrown",
+  deckMottle: [{ color: "darkTan", share: 0.12 }],
+  strakes: [
+    { below: 13, color: "black", mottle: black },
+    { below: 16, color: "darkRed", mottle: red },
+    { below: 24, color: "black", mottle: black },
+    { below: 25, color: "pearlGold" },
+    { below: 28, color: "darkRed", mottle: red },
+    { below: 37, color: "black", mottle: black },
+    { below: 38, color: "pearlGold" },
+    { below: 41, color: "darkRed", mottle: red },
+    { below: 42, color: "pearlGold" },
+    { below: 46, color: "black", mottle: black },
+    { below: 47, color: "pearlGold" },
+    { below: 52, color: "darkRed", mottle: red },
+    { below: 99, color: "pearlGold" },
+  ],
+  guns: galleonGunSpec,
+  port: { width: 2, height: 6 },
+  partRange: [2500, 6000],
+}

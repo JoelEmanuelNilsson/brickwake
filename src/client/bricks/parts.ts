@@ -1,78 +1,8 @@
 import { Matrix4 } from "three"
-import { type Point2, type Point3, PartMesher, metresPerLdu } from "./geometry.ts"
+import { ldu, metresPerLdu, type PartId, type PartInfo, type Point2, partCatalog } from "../../sim/ship/parts.ts"
+import { PartMesher } from "./geometry.ts"
 
-/** LDraw unit sizes: stud pitch, plate height and brick height. */
-export const ldu = { stud: 20, plate: 8, brick: 24 } as const
-
-/**
- * One part shape. Local frame: LDraw's with y and z negated (y up, still right-handed),
- * origin at the bottom centre of the footprint; slopes descend toward +z, cannons point +z.
- */
-export interface PartShape {
-  readonly name: string
-  /** Bounding footprint in studs, [x, z]. */
-  readonly size: Point2
-  /** Body height in LDU, studs excluded. */
-  readonly height: number
-  /** Stud base centres in LDU. */
-  readonly studs: ReadonlyArray<Point3>
-  /** Where the LDraw part origin sits in the local frame, for `.ldr` export. */
-  readonly ldrawOrigin: Point3
-  /** Geometry reaches past the footprint (cannon barrel, wheel rim). */
-  readonly overhangs?: true
-  readonly build: (mesher: PartMesher) => void
-}
-
-const { stud, plate, brick } = ldu
-
-const studGrid = (sx: number, sz: number, y: number): Array<Point3> =>
-  Array.from({ length: sx * sz }, (_, i): Point3 => [(i % sx) * stud - ((sx - 1) * stud) / 2, y, Math.floor(i / sx) * stud - ((sz - 1) * stud) / 2])
-
-const block = (name: string, sx: number, sz: number, height: number, studs = studGrid(sx, sz, height)): PartShape => ({
-  name,
-  size: [sx, sz],
-  height,
-  studs,
-  ldrawOrigin: [0, height, 0],
-  build: (m) => m.box([(-sx * stud) / 2, 0, (-sz * stud) / 2], [(sx * stud) / 2, height, (sz * stud) / 2]),
-})
-
-/** A side profile in (z, y) extruded across the part's width along x. */
-const sideProfile = (name: string, sx: number, sz: number, height: number, profile: ReadonlyArray<Point2>, studs: ReadonlyArray<Point3>, ldrawOrigin: Point3): PartShape => ({
-  name,
-  size: [sx, sz],
-  height,
-  studs,
-  ldrawOrigin,
-  build: (m) => m.prism(profile, "x", (-sx * stud) / 2, (sx * stud) / 2),
-})
-
-/** A plan outline in (x, z) extruded one plate up; `mirror` makes the left-hand twin of a right-hand wedge. */
-const wedgePlate = (name: string, sx: number, sz: number, outline: ReadonlyArray<Point2>, studs: ReadonlyArray<Point3>, mirror = false): PartShape => {
-  const flip = mirror ? -1 : 1
-  return {
-    name,
-    size: [sx, sz],
-    height: plate,
-    studs: studs.map(([x, y, z]): Point3 => [x * flip, y, z]),
-    ldrawOrigin: [0, plate, 0],
-    build: (m) => m.prism(outline.map(([x, z]): Point2 => [x * flip, z]), "y", 0, plate),
-  }
-}
-
-/** A round part as a chamfered cylinder. */
-const round = (name: string, size: number, height: number, segments: number, studs: ReadonlyArray<Point3>): PartShape => {
-  const r = (size * stud) / 2
-  const c = 0.7
-  return {
-    name,
-    size: [size, size],
-    height,
-    studs,
-    ldrawOrigin: [0, height, 0],
-    build: (m) => m.lathe([[0, 0], [r - c, 0], [r, c], [r, height - c], [r - c, height], [0, height]], segments),
-  }
-}
+const { stud, plate } = ldu
 
 const slope45: ReadonlyArray<Point2> = [[-20, 0], [20, 0], [20, 4], [0, 24], [-20, 24]]
 const inverted45: ReadonlyArray<Point2> = [[-20, 0], [0, 0], [20, 20], [20, 24], [-20, 24]]
@@ -93,171 +23,150 @@ const wedge3x2: ReadonlyArray<Point2> = [[-20, -30], [20, -30], [20, 30], [0, 30
 const wedge2x2: ReadonlyArray<Point2> = [[-18.5, -20], [20, -20], [20, 20], [0, 20], [-18.5, -17]]
 const wedge2x4: ReadonlyArray<Point2> = [[-38.5, -20], [38.5, -20], [38.5, -17], [20, 20], [-20, 20], [-38.5, -17]]
 
+type Build = (mesher: PartMesher, info: PartInfo) => void
+
 const rotateX90 = new Matrix4().makeRotationX(Math.PI / 2)
 const rotateZ90 = new Matrix4().makeRotationZ(-Math.PI / 2)
 const translated = (x: number, y: number, z: number, rotation = new Matrix4()) => new Matrix4().makeTranslation(x, y, z).multiply(rotation)
 
-const cannon: PartShape = {
-  name: "Cannon on carriage",
-  size: [2, 4],
-  overhangs: true,
-  height: 36,
-  studs: [],
-  ldrawOrigin: [0, 8, 0],
-  build: (m) => {
-    m.box([-16, 0, -36], [16, 7, 30])
-    for (const side of [-1, 1]) {
-      m.box([side > 0 ? 9 : -15, 7, -30], [side > 0 ? 15 : -9, 23, 22])
-      for (const z of [-24, 14]) m.lathe([[0, -3], [9, -3], [9, 3], [0, 3]], 10, translated(side * 18, 9, z, rotateZ90))
-    }
-    const barrel = translated(0, 29, 0, rotateX90)
-    m.lathe([[0, -38], [3.5, -38], [4.5, -36], [3, -33], [7, -32], [9.5, -29], [9.5, -20], [8.5, -18], [8.5, 8], [7.5, 11], [7, 40], [8.5, 42], [9, 48], [8, 50], [5, 50], [5, 44]], 12, barrel)
-    m.use(0, 0.08)
-    m.lathe([[5, 44], [0, 44]], 12, barrel)
-    m.use(0)
-    m.lathe([[0, -5], [4, -5], [4, 5], [0, 5]], 8, translated(0, 29, -8, rotateZ90).multiply(new Matrix4().makeScale(1, 3.4, 1)))
-  },
+const cannon: Build = (m) => {
+  m.box([-16, 0, -36], [16, 7, 30])
+  for (const side of [-1, 1]) {
+    m.box([side > 0 ? 9 : -15, 7, -30], [side > 0 ? 15 : -9, 23, 22])
+    for (const z of [-24, 14]) m.lathe([[0, -3], [9, -3], [9, 3], [0, 3]], 10, translated(side * 18, 9, z, rotateZ90))
+  }
+  const barrel = translated(0, 29, 0, rotateX90)
+  m.lathe([[0, -38], [3.5, -38], [4.5, -36], [3, -33], [7, -32], [9.5, -29], [9.5, -20], [8.5, -18], [8.5, 8], [7.5, 11], [7, 40], [8.5, 42], [9, 48], [8, 50], [5, 50], [5, 44]], 12, barrel)
+  m.use(0, 0.08)
+  m.lathe([[5, 44], [0, 44]], 12, barrel)
+  m.use(0)
+  m.lathe([[0, -5], [4, -5], [4, 5], [0, 5]], 8, translated(0, 29, -8, rotateZ90).multiply(new Matrix4().makeScale(1, 3.4, 1)))
 }
 
-const lantern: PartShape = {
-  name: "Minifig lantern",
-  size: [1, 1],
-  height: 34,
-  studs: [],
-  ldrawOrigin: [0, 34, 0],
-  build: (m) => {
-    m.lathe([[0, 0], [8, 0], [9, 1], [9, 4], [7, 5]], 8)
-    m.use(1)
-    m.lathe([[7, 5], [7, 20]], 8)
-    m.use(0)
-    m.lathe([[7, 20], [9, 21], [9, 24], [7, 25], [4, 30], [2.5, 31], [2.5, 34], [0, 34]], 8)
-    for (let k = 0; k < 4; k++) {
-      const angle = Math.PI / 8 + (k * Math.PI) / 2
-      m.box([-1, 5, -1], [1, 20, 1], translated(7.4 * Math.cos(angle), 0, -7.4 * Math.sin(angle)), 0.4)
-    }
-  },
+const lantern: Build = (m) => {
+  m.lathe([[0, 0], [8, 0], [9, 1], [9, 4], [7, 5]], 8)
+  m.use(1)
+  m.lathe([[7, 5], [7, 20]], 8)
+  m.use(0)
+  m.lathe([[7, 20], [9, 21], [9, 24], [7, 25], [4, 30], [2.5, 31], [2.5, 34], [0, 34]], 8)
+  for (let k = 0; k < 4; k++) {
+    const angle = Math.PI / 8 + (k * Math.PI) / 2
+    m.box([-1, 5, -1], [1, 20, 1], translated(7.4 * Math.cos(angle), 0, -7.4 * Math.sin(angle)), 0.4)
+  }
 }
 
-const barrel: PartShape = {
-  name: "Barrel",
-  size: [2, 2],
-  height: 40,
-  studs: [],
-  ldrawOrigin: [0, 40, 0],
-  build: (m) => {
-    m.lathe([[0, 0], [14, 0], [15, 1], [16, 6]], 20)
-    m.use(0, 0.55)
-    m.lathe([[16, 6], [16.8, 9]], 20)
-    m.use(0)
-    m.lathe([[16.8, 9], [17.7, 15], [18, 20], [17.7, 25], [16.8, 31]], 20)
-    m.use(0, 0.55)
-    m.lathe([[16.8, 31], [16, 34]], 20)
-    m.use(0)
-    m.lathe([[16, 34], [15, 39], [14, 40], [0, 40]], 20)
-  },
+const barrel: Build = (m) => {
+  m.lathe([[0, 0], [14, 0], [15, 1], [16, 6]], 20)
+  m.use(0, 0.55)
+  m.lathe([[16, 6], [16.8, 9]], 20)
+  m.use(0)
+  m.lathe([[16.8, 9], [17.7, 15], [18, 20], [17.7, 25], [16.8, 31]], 20)
+  m.use(0, 0.55)
+  m.lathe([[16.8, 31], [16, 34]], 20)
+  m.use(0)
+  m.lathe([[16, 34], [15, 39], [14, 40], [0, 40]], 20)
 }
 
-const shipWheel: PartShape = {
-  name: "Ship's wheel on post",
-  size: [2, 1],
-  overhangs: true,
-  height: 72,
-  studs: [],
-  ldrawOrigin: [0, 8, 0],
-  build: (m) => {
-    m.box([-20, 0, -10], [20, 8, 10])
-    m.box([-4, 8, -10], [4, 38, -3])
-    const hub = translated(0, 38, 0, rotateX90)
-    m.lathe([[24, -2], [28, -2], [28, 2], [24, 2], [24, -2]], 24, hub)
-    m.lathe([[0, -5], [6, -5], [7, -4], [7, 4], [6, 5], [0, 5]], 12, hub)
-    for (let k = 0; k < 8; k++) {
-      const spoke = translated(0, 38, 0, new Matrix4().makeRotationZ((k * Math.PI) / 4))
-      m.box([5, -1.5, -1.5], [26, 1.5, 1.5], spoke, 0)
-      m.lathe([[0, 25], [2.8, 28], [2, 33], [0, 36]], 6, spoke.clone().multiply(rotateZ90))
-    }
-  },
+const shipWheel: Build = (m) => {
+  m.box([-20, 0, -10], [20, 8, 10])
+  m.box([-4, 8, -10], [4, 38, -3])
+  const hub = translated(0, 38, 0, rotateX90)
+  m.lathe([[24, -2], [28, -2], [28, 2], [24, 2], [24, -2]], 24, hub)
+  m.lathe([[0, -5], [6, -5], [7, -4], [7, 4], [6, 5], [0, 5]], 12, hub)
+  for (let k = 0; k < 8; k++) {
+    const spoke = translated(0, 38, 0, new Matrix4().makeRotationZ((k * Math.PI) / 4))
+    m.box([5, -1.5, -1.5], [26, 1.5, 1.5], spoke, 0)
+    m.lathe([[0, 25], [2.8, 28], [2, 33], [0, 36]], 6, spoke.clone().multiply(rotateZ90))
+  }
 }
 
-const fence: PartShape = {
-  name: "Fence 1 x 4 x 1",
-  size: [4, 1],
-  height: 24,
-  studs: [],
-  ldrawOrigin: [0, 24, 0],
-  build: (m) => {
-    m.box([-40, 0, -5], [40, 4, 5])
-    m.box([-40, 20, -3.5], [40, 24, 3.5])
-    for (const x of [-37, -18.5, 0, 18.5, 37]) m.box([x - 2.5, 4, -2.5], [x + 2.5, 20, 2.5], undefined, 0.5)
-  },
+const fence: Build = (m) => {
+  m.box([-40, 0, -5], [40, 4, 5])
+  m.box([-40, 20, -3.5], [40, 24, 3.5])
+  for (const x of [-37, -18.5, 0, 18.5, 37]) m.box([x - 2.5, 4, -2.5], [x + 2.5, 20, 2.5], undefined, 0.5)
 }
 
-const shapes = {
-  "3005": block("Brick 1 x 1", 1, 1, brick),
-  "3004": block("Brick 1 x 2", 2, 1, brick),
-  "3622": block("Brick 1 x 3", 3, 1, brick),
-  "3010": block("Brick 1 x 4", 4, 1, brick),
-  "3009": block("Brick 1 x 6", 6, 1, brick),
-  "3008": block("Brick 1 x 8", 8, 1, brick),
-  "3003": block("Brick 2 x 2", 2, 2, brick),
-  "3002": block("Brick 2 x 3", 3, 2, brick),
-  "3001": block("Brick 2 x 4", 4, 2, brick),
-  "3024": block("Plate 1 x 1", 1, 1, plate),
-  "3023": block("Plate 1 x 2", 2, 1, plate),
-  "3623": block("Plate 1 x 3", 3, 1, plate),
-  "3710": block("Plate 1 x 4", 4, 1, plate),
-  "3666": block("Plate 1 x 6", 6, 1, plate),
-  "3460": block("Plate 1 x 8", 8, 1, plate),
-  "3022": block("Plate 2 x 2", 2, 2, plate),
-  "3021": block("Plate 2 x 3", 3, 2, plate),
-  "3020": block("Plate 2 x 4", 4, 2, plate),
-  "3795": block("Plate 2 x 6", 6, 2, plate),
-  "3794b": block("Plate 1 x 2 with 1 centre stud (jumper)", 2, 1, plate, [[0, plate, 0]]),
-  "3070b": block("Tile 1 x 1", 1, 1, plate, []),
-  "3069b": block("Tile 1 x 2", 2, 1, plate, []),
-  "63864": block("Tile 1 x 3", 3, 1, plate, []),
-  "2431": block("Tile 1 x 4", 4, 1, plate, []),
-  "3068b": block("Tile 2 x 2", 2, 2, plate, []),
-  "3040b": sideProfile("Slope 45 2 x 1", 1, 2, brick, slope45, [[0, brick, -10]], [0, brick, -10]),
-  "3039": sideProfile("Slope 45 2 x 2", 2, 2, brick, slope45, [[-10, brick, -10], [10, brick, -10]], [0, brick, -10]),
-  "3665": sideProfile("Slope 45 2 x 1 inverted", 1, 2, brick, inverted45, [[0, brick, -10]], [0, brick, -10]),
-  "3660": sideProfile("Slope 45 2 x 2 inverted", 2, 2, brick, inverted45, [[-10, brick, -10], [10, brick, -10]], [0, brick, -10]),
-  "85984": sideProfile("Slope 30 1 x 2 x 2/3", 2, 1, 16, cheese, [], [0, 0, 0]),
-  "54200": sideProfile("Slope 30 1 x 1 x 2/3", 1, 1, 16, cheese, [], [0, 0, 0]),
-  "11477": sideProfile("Slope curved 2 x 1 x 2/3", 1, 2, 16, curved2, [], [0, 0, 0]),
-  "15068": sideProfile("Slope curved 2 x 2 x 2/3", 2, 2, 16, curved2, [], [0, 0, 0]),
-  "50950": sideProfile("Slope curved 3 x 1", 1, 3, brick, curved3, [], [0, brick, 0]),
-  "93273": sideProfile("Slope curved 4 x 1 double", 1, 4, 16, doubleCurved, [], [0, 0, 0]),
-  "41769": wedgePlate("Wedge plate 4 x 2 right", 2, 4, wedge4x2, studGrid(1, 4, plate).map(([, y, z]): Point3 => [10, y, z])),
-  "41770": wedgePlate("Wedge plate 4 x 2 left", 2, 4, wedge4x2, studGrid(1, 4, plate).map(([, y, z]): Point3 => [10, y, z]), true),
-  "43722": wedgePlate("Wedge plate 3 x 2 right", 2, 3, wedge3x2, studGrid(1, 3, plate).map(([, y, z]): Point3 => [10, y, z])),
-  "43723": wedgePlate("Wedge plate 3 x 2 left", 2, 3, wedge3x2, studGrid(1, 3, plate).map(([, y, z]): Point3 => [10, y, z]), true),
-  "24307": wedgePlate("Wedge plate 2 x 2 right", 2, 2, wedge2x2, [[10, plate, -10], [10, plate, 10]]),
-  "24299": wedgePlate("Wedge plate 2 x 2 left", 2, 2, wedge2x2, [[10, plate, -10], [10, plate, 10]], true),
-  "51739": wedgePlate("Wedge plate 2 x 4", 4, 2, wedge2x4, studGrid(2, 2, plate)),
-  "6141": round("Round plate 1 x 1", 1, plate, 16, [[0, plate, 0]]),
-  "3062b": round("Round brick 1 x 1", 1, brick, 16, [[0, brick, 0]]),
-  "4032": round("Round plate 2 x 2", 2, plate, 24, studGrid(2, 2, plate)),
-  "3941": round("Round brick 2 x 2", 2, brick, 24, studGrid(2, 2, brick)),
+const boxed: Build = (m, { size: [sx, sz], height }) => m.box([(-sx * stud) / 2, 0, (-sz * stud) / 2], [(sx * stud) / 2, height, (sz * stud) / 2])
+
+/** A side profile in (z, y) extruded across the part's width along x. */
+const sideProfile =
+  (profile: ReadonlyArray<Point2>): Build =>
+  (m, { size: [sx] }) =>
+    m.prism(profile, "x", (-sx * stud) / 2, (sx * stud) / 2)
+
+/** A plan outline in (x, z) extruded one plate up; `mirror` makes the left-hand twin of a right-hand wedge. */
+const wedgePlate =
+  (outline: ReadonlyArray<Point2>, mirror = false): Build =>
+  (m) =>
+    m.prism(outline.map(([x, z]): Point2 => [mirror ? -x : x, z]), "y", 0, plate)
+
+/** A round part as a chamfered cylinder. */
+const round =
+  (segments: number): Build =>
+  (m, { size: [size], height }) => {
+    const r = (size * stud) / 2
+    const c = 0.7
+    m.lathe([[0, 0], [r - c, 0], [r, c], [r, height - c], [r - c, height], [0, height]], segments)
+  }
+
+const builders: Readonly<Record<PartId, Build>> = {
+  "3005": boxed,
+  "3004": boxed,
+  "3622": boxed,
+  "3010": boxed,
+  "3009": boxed,
+  "3008": boxed,
+  "3003": boxed,
+  "3002": boxed,
+  "3001": boxed,
+  "3024": boxed,
+  "3023": boxed,
+  "3623": boxed,
+  "3710": boxed,
+  "3666": boxed,
+  "3460": boxed,
+  "3022": boxed,
+  "3021": boxed,
+  "3020": boxed,
+  "3795": boxed,
+  "3794b": boxed,
+  "3070b": boxed,
+  "3069b": boxed,
+  "63864": boxed,
+  "2431": boxed,
+  "3068b": boxed,
+  "3040b": sideProfile(slope45),
+  "3039": sideProfile(slope45),
+  "3665": sideProfile(inverted45),
+  "3660": sideProfile(inverted45),
+  "85984": sideProfile(cheese),
+  "54200": sideProfile(cheese),
+  "11477": sideProfile(curved2),
+  "15068": sideProfile(curved2),
+  "50950": sideProfile(curved3),
+  "93273": sideProfile(doubleCurved),
+  "41769": wedgePlate(wedge4x2),
+  "41770": wedgePlate(wedge4x2, true),
+  "43722": wedgePlate(wedge3x2),
+  "43723": wedgePlate(wedge3x2, true),
+  "24307": wedgePlate(wedge2x2),
+  "24299": wedgePlate(wedge2x2, true),
+  "51739": wedgePlate(wedge2x4),
+  "6141": round(16),
+  "3062b": round(16),
+  "4032": round(24),
+  "3941": round(24),
   "2527c01": cannon,
   "37776": lantern,
   "2489": barrel,
   "4790": shipWheel,
   "3633": fence,
-} satisfies Record<string, PartShape>
-
-/** LDraw part ID of a shape in `partShapes`. */
-export type PartId = keyof typeof shapes
-
-/** Every part shape the ships are built from, keyed by LDraw part ID. */
-export const partShapes: Readonly<Record<PartId, PartShape>> = shapes
-
-/** All part IDs, in catalogue order. */
-export const partIds = Object.keys(partShapes).filter((id): id is PartId => Object.hasOwn(partShapes, id))
+}
 
 /** Build a part's geometry in metres; call once per shape and share it across ships. */
 export const buildPartGeometry = (id: PartId) => {
   const mesher = new PartMesher()
-  partShapes[id].build(mesher)
+  builders[id](mesher, partCatalog[id])
   return mesher.finish()
 }
 
