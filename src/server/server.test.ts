@@ -1,0 +1,251 @@
+import { afterAll, beforeAll, expect, test } from "bun:test"
+import { Cause, Effect, Exit, Layer, ManagedRuntime, Schema } from "effect"
+import { HttpServer } from "effect/unstable/http"
+import { ServerMessageJson, type ServerMessage } from "../protocol/messages.ts"
+import { seas, swell } from "../sim/ocean.ts"
+import { scenarioShipId } from "../sim/scenarios.ts"
+import { SIM_HZ } from "../sim/tuning.ts"
+import type { NetworkLag } from "./lag.ts"
+import * as Server from "./server.ts"
+
+const decode = Schema.decodeUnknownSync(ServerMessageJson)
+
+type Snapshot = Extract<ServerMessage, { readonly _tag: "snapshot" }>
+type Welcome = Extract<ServerMessage, { readonly _tag: "welcome" }>
+
+const startServer = async (lag?: NetworkLag) => {
+  const runtime = ManagedRuntime.make(Server.layer(lag ? { port: 0, lag } : { port: 0 }).pipe(Layer.orDie))
+  const { address } = await runtime.runPromise(
+    Effect.gen(function* () {
+      return yield* HttpServer.HttpServer
+    }),
+  )
+  if (address._tag === "UnixPathAddress") throw new Error("expected an IP address")
+  return {
+    url: `ws://127.0.0.1:${address.port}/ws`,
+    dispose: async () => {
+      // Closing interrupts WebSocket handlers still open, and the platform reports that as an interrupted exit.
+      const exit = await Effect.runPromiseExit(runtime.disposeEffect)
+      if (Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)) throw Cause.squash(exit.cause)
+    },
+  }
+}
+
+/** A real WebSocket client that decodes every server message the way the game client must. */
+const connect = async (url: string) => {
+  const socket = new WebSocket(url)
+  const received: Array<{ readonly at: number; readonly message: ServerMessage }> = []
+  let waiters: Array<() => void> = []
+  socket.addEventListener("message", (event) => {
+    received.push({ at: performance.now(), message: decode(event.data) })
+    const woken = waiters
+    waiters = []
+    for (const wake of woken) wake()
+  })
+  await new Promise((resolve, reject) => {
+    socket.addEventListener("open", resolve)
+    socket.addEventListener("error", reject)
+  })
+  const next = <T extends ServerMessage>(match: (message: ServerMessage) => message is T, from = 0): Promise<T> =>
+    new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("no matching message within 2 s")), 2000)
+      const check = () => {
+        const found = received.slice(from).find((entry) => match(entry.message))
+        if (found) {
+          clearTimeout(timeout)
+          resolve(found.message as T)
+        } else waiters.push(check)
+      }
+      check()
+    })
+  return {
+    socket,
+    received,
+    send: (message: unknown) => socket.send(typeof message === "string" ? message : JSON.stringify(message)),
+    next,
+    /** The first message of a tag after the `from`-th received message. */
+    nextOf: <K extends ServerMessage["_tag"]>(tag: K, from = received.length) =>
+      next((message): message is Extract<ServerMessage, { readonly _tag: K }> => message._tag === tag, from),
+    snapshots: () => received.flatMap((entry) => (entry.message._tag === "snapshot" ? [{ at: entry.at, snapshot: entry.message }] : [])),
+    close: async () => {
+      socket.close()
+      if (socket.readyState !== WebSocket.CLOSED) await new Promise((resolve) => socket.addEventListener("close", resolve))
+    },
+  }
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+const ownShip = (snapshot: Snapshot, welcome: Welcome) => snapshot.ships.find((ship) => ship.id === welcome.shipId)
+
+let server: Awaited<ReturnType<typeof startServer>>
+beforeAll(async () => {
+  server = await startServer()
+})
+afterAll(() => server.dispose())
+
+test("a joining client gets a welcome with the match sea, then a full snapshot every tick at 30 Hz", async () => {
+  const client = await connect(server.url)
+  client.send({ _tag: "join", mode: "ffa" })
+  const welcome = await client.nextOf("welcome", 0)
+  expect(welcome.simHz).toBe(SIM_HZ)
+  expect(welcome.sea).toEqual(seas.open)
+  expect(welcome.ships.map((ship) => ship.id)).toContain(welcome.shipId)
+
+  const first = await client.nextOf("snapshot")
+  expect(first.events).toContainEqual({ _tag: "shipJoined", tick: welcome.tick, shipId: welcome.shipId })
+  await sleep(2000)
+  const snapshots = client.snapshots()
+  const ticks = snapshots.map(({ snapshot }) => snapshot.tick)
+  expect(ticks).toEqual(ticks.map((_, index) => (ticks[0] ?? 0) + index))
+  const window = snapshots.filter(({ at }) => at >= (snapshots[0]?.at ?? 0) + 500)
+  const rate = (window.length - 1) / (((window.at(-1)?.at ?? 0) - (window[0]?.at ?? 0)) / 1000)
+  expect(rate).toBeGreaterThan(29)
+  expect(rate).toBeLessThan(31)
+  const bytes = JSON.stringify(snapshots.at(-1)?.snapshot).length
+  expect(bytes).toBeLessThan(400)
+  console.log(`snapshots at ${rate.toFixed(2)} Hz, ${bytes} B with one ship`)
+  await client.close()
+})
+
+test("helm and sail commands steer the client's ship", async () => {
+  const client = await connect(server.url)
+  client.send({ _tag: "join", mode: "ffa" })
+  const welcome = await client.nextOf("welcome", 0)
+  const start = welcome.ships.find((ship) => ship.id === welcome.shipId)
+  client.send({ _tag: "setSail", level: 2 })
+  client.send({ _tag: "setHelm", rudder: 1 })
+  await sleep(1500)
+  const later = ownShip(client.snapshots().at(-1)!.snapshot, welcome)
+  expect(later).toMatchObject({ sail: 2, rudder: 1 })
+  expect(later!.rudderAngle).toBeGreaterThan(0.1)
+  expect(later!.sailSet).toBeGreaterThan(0.3)
+  expect(Math.hypot(...later!.velocity)).toBeGreaterThan(0.2)
+  expect(later!.position).not.toEqual(start!.position)
+
+  const from = client.received.length
+  client.send({ _tag: "setHelm", rudder: 0 })
+  client.send({ _tag: "setSail", level: 0 })
+  const centred = await client.next(
+    (message): message is Snapshot => message._tag === "snapshot" && ownShip(message, welcome)?.rudder === 0,
+    from,
+  )
+  expect(ownShip(centred, welcome)?.sail).toBe(0)
+  await client.close()
+})
+
+test("invalid messages are rejected, the connection stays usable and the room keeps ticking", async () => {
+  const bystander = await connect(server.url)
+  bystander.send({ _tag: "join", mode: "ffa" })
+  await bystander.nextOf("welcome", 0)
+
+  const client = await connect(server.url)
+  const invalid: ReadonlyArray<unknown> = [
+    "not json",
+    "{}",
+    { _tag: "fly" },
+    { _tag: "join", mode: "tdm-royale" },
+    { _tag: "join", mode: "ffa", scenario: "nowhere" },
+    { _tag: "setHelm", rudder: 1 },
+    JSON.stringify({ _tag: "setSail", level: "x".repeat(10_000) }),
+  ]
+  for (const message of invalid) {
+    const from = client.received.length
+    client.send(message)
+    expect((await client.nextOf("rejected", from)).reason.length).toBeGreaterThan(0)
+  }
+  let from = client.received.length
+  client.socket.send(new Uint8Array([1, 2, 3]))
+  expect((await client.nextOf("rejected", from)).reason).toContain("binary")
+
+  client.send({ _tag: "join", mode: "ffa" })
+  const welcome = await client.nextOf("welcome", 0)
+  for (const message of [
+    { _tag: "setHelm", rudder: 5 },
+    { _tag: "setSail", level: 1.5 },
+    { _tag: "setHelm", rudder: Number.NaN },
+    { _tag: "join", mode: "ffa" },
+  ]) {
+    from = client.received.length
+    client.send(message)
+    await client.nextOf("rejected", from)
+  }
+  const snapshot = await client.nextOf("snapshot")
+  expect(ownShip(snapshot, welcome)).toMatchObject({ rudder: 0, sail: 0 })
+
+  const ticksBefore = bystander.snapshots().length
+  await sleep(300)
+  expect(bystander.snapshots().length - ticksBefore).toBeGreaterThanOrEqual(8)
+  await Promise.all([client.close(), bystander.close()])
+})
+
+test("quick play puts clients in one room; a leaver's ship goes and the others hear it", async () => {
+  const a = await connect(server.url)
+  const b = await connect(server.url)
+  a.send({ _tag: "join", mode: "ffa" })
+  const welcomeA = await a.nextOf("welcome", 0)
+  b.send({ _tag: "join", mode: "ffa" })
+  const welcomeB = await b.nextOf("welcome", 0)
+  expect(welcomeB.ships.map((ship) => ship.id)).toEqual([welcomeA.shipId, welcomeB.shipId])
+  const [shipA, shipB] = welcomeB.ships
+  expect(Math.hypot(shipA!.position[0] - shipB!.position[0], shipA!.position[2] - shipB!.position[2])).toBeGreaterThan(100)
+
+  const from = a.received.length
+  await b.close()
+  const left = await a.next(
+    (message): message is Snapshot => message._tag === "snapshot" && message.events.some((event) => event._tag === "shipLeft"),
+    from,
+  )
+  expect(left.events).toContainEqual({ _tag: "shipLeft", tick: expect.any(Number), shipId: welcomeB.shipId })
+  expect(left.ships.map((ship) => ship.id)).toEqual([welcomeA.shipId])
+
+  a.send({ _tag: "leave" })
+  await sleep(100)
+  const quiet = a.received.length
+  await sleep(200)
+  expect(a.received.length).toBe(quiet)
+  a.send({ _tag: "join", mode: "ffa" })
+  expect((await a.nextOf("welcome")).ships.length).toBe(1)
+  await a.close()
+})
+
+test("a scenario join starts a private room from that scenario", async () => {
+  const client = await connect(server.url)
+  client.send({ _tag: "join", mode: "ffa", scenario: "beam-sea" })
+  const welcome = await client.nextOf("welcome", 0)
+  expect(welcome.shipId).toBe(scenarioShipId)
+  expect(welcome.tick).toBe(0)
+  expect(welcome.sea).toEqual(swell(-Math.PI / 2))
+  const other = await connect(server.url)
+  other.send({ _tag: "join", mode: "ffa" })
+  expect((await other.nextOf("welcome", 0)).ships.map((ship) => ship.id)).not.toContain(scenarioShipId)
+  await Promise.all([client.close(), other.close()])
+})
+
+test("injected latency delays both directions", async () => {
+  const lagged = await startServer({ latencyMs: 120, jitterMs: 30 })
+  try {
+    const client = await connect(lagged.url)
+    const sent = performance.now()
+    client.send({ _tag: "join", mode: "ffa" })
+    const welcome = await client.nextOf("welcome", 0)
+    const roundTrip = client.received[0]!.at - sent
+    expect(roundTrip).toBeGreaterThanOrEqual(240)
+    expect(roundTrip).toBeLessThan(400)
+
+    await sleep(500)
+    const ticks = client.snapshots().map(({ snapshot }) => snapshot.tick)
+    expect(ticks).toEqual(ticks.map((_, index) => (ticks[0] ?? 0) + index))
+    const from = client.received.length
+    const commanded = performance.now()
+    client.send({ _tag: "setSail", level: 2 })
+    await client.next(
+      (message): message is Snapshot => message._tag === "snapshot" && ownShip(message, welcome)?.sail === 2,
+      from,
+    )
+    expect(performance.now() - commanded).toBeGreaterThanOrEqual(240)
+    await client.close()
+  } finally {
+    await lagged.dispose()
+  }
+})

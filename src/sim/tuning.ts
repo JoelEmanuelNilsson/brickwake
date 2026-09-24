@@ -131,6 +131,12 @@ export const tuning = {
     /** Seconds between guns in a ripple broadside. */
     rippleInterval: 0.05,
   },
+  match: {
+    /** Ships a room holds, humans and bots together. */
+    maxShips: 12,
+    /** Joining ships start on this ring about the arena centre, in the free slot farthest from others. */
+    spawnRing: { radius: 260, slots: 12 },
+  },
   arena: {
     radius: 700,
     /** The boundary starts pushing here and pushes harder than full sail by `radius`. */
