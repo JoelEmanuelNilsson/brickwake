@@ -31,6 +31,54 @@ the distance. `ref-04`/`ref-05` show the gun-deck view through a gunport.
   `ShipSpec`, rendered as `InstancedMesh` per part shape per ship.
 - Gameplay is built on grey-box ships while the Lego ship is built in parallel in a
   ship lab; they merge at C5.
+- Where the effort goes (Joel, 2026-09-24): physics first. High quality in: ship
+  physics on waves and wind, the waves themselves, steering, firing and animation,
+  gun effects, explosions and destruction, brick logic (what connects, what falls),
+  and a sophisticated, well-thought-out Lego ship. Cheap on purpose: the map. It is
+  open ocean in a circular arena with sky and fog; no islands, rocks or fortress
+  until later.
+
+## Physics and feel
+
+The ship is a rigid body in the authoritative sim, not a scripted mover. What the
+player feels comes out of forces, so speed, turning, heel and pitching agree with
+each other and with what the player sees.
+
+- Waves: a sum of a few Gerstner waves, one pure function
+  `sampleOcean(x, z, t) → { height, normal, velocity }` shared by sim and client.
+  The client's water mesh and the sim's buoyancy and splashes use the same function,
+  so a ship sits in the water it is drawn in and a ball splashes where the drawn
+  surface is. Swell sized for the refs (heavy seas), set by feel, not capped at 1 m.
+- Buoyancy: a fixed set of sample points along the hull. Each submerged point pushes
+  up by its depth and damps by its vertical velocity relative to the water. Heave,
+  pitch and roll follow from the waves; a ship rides over swells and rolls in a beam
+  sea.
+- Wind: one match wind (direction, strength, slow gusts from the seeded RNG). Sail
+  force depends on the sail level and the angle to the wind (points of sail). Force
+  at the sail's height heels the ship to leeward.
+- Hull: a keel resists sideways motion far more than forward motion, which turns
+  sail force into forward drive with some leeway. Drag rises with speed.
+- Rudder: force proportional to water speed past it, so a stopped ship barely turns
+  and a fast one carves. Turning heels the ship.
+- Firing: each gun's recoil pushes the ship; a full broadside rocks it.
+- Damage: brick loss changes nothing physical at first (single HP). Later, holes
+  below the waterline can remove buoyancy for listing and flooding; the removed-brick
+  set is already in sim state for this.
+- Sinking is physical: buoyancy fades, the ship settles by the bow or stern and goes
+  under.
+- Determinism: fixed 30 Hz sim step (substeps if the buoyancy needs them), no
+  engine, plain TypeScript, so replay from seed and inputs still holds. A rigid-body
+  engine is not needed for ~12 ships with box collisions.
+- Cosmetic physics runs on the client only and never feeds back into gameplay:
+  brick debris and detached chunks tumble, splash, float briefly and sink; sail
+  cloth and flags move with wind; smoke drifts with wind. Whether debris uses Rapier
+  or a small custom solver is decided at S3 by how it looks and what it costs.
+- Camera and animation: the chase camera follows smoothly without inheriting every
+  roll; cannons recoil and run out; rudder and sails animate to their state; hits
+  shake the camera by distance.
+- Gun effects: muzzle flash with light, smoke that lingers and drifts, a visible
+  ball, splash sized by impact, brick bursts and splinters on hits, and a large
+  sinking sequence. Quality bar: ref-01 and ref-05.
 
 ## Player experience
 
@@ -78,10 +126,10 @@ Sink ships to score. Sunk ships respawn.
 | Thing | Value |
 |---|---|
 | Ship hull (hit box) | 28 m long, 8 m beam, −2 m to +4 m about waterline |
-| Max speed (full sail, beam reach) | 12 m/s; half sail 60 % |
-| Wind factor by angle to wind | ~0.2 within 45° of upwind, 1.0 beam reach, 0.8 running |
-| Speed response | approaches target with ~4 s time constant |
-| Turn rate | 12°/s at full rudder, scaled by speed, floor 30 % |
+| Max speed (full sail, beam reach) | 12 m/s; half sail 60 % (a target the force model is tuned to reach) |
+| Wind factor by angle to wind | ~0.2 within 45° of upwind, 1.0 beam reach, 0.8 running (target) |
+| Speed response | reaches ~63 % of target speed in ~4 s (target) |
+| Turn rate | ~12°/s at full rudder and full speed (target); comes from rudder force |
 | Guns | 8 per side, ripple broadside 60 ms apart |
 | Reload | 6 s per side |
 | Muzzle speed / gravity | 90 m/s / 9.81 m/s² |
@@ -137,13 +185,14 @@ better than one box.
 Ships collide with each other (pushed apart, no ram damage at first); bots chasing
 the same target would otherwise overlap.
 
-Ocean waves are a shared pure function `sampleOceanHeight(x, z, t)` (sum of a few
-Gerstner waves). The client uses it for the water mesh and for ship bob, pitch and roll.
-Gameplay does not depend on it: hit boxes sit at the waterline and balls splash at y = 0,
-so wave amplitude stays small (≤ 1 m) to keep visuals and hits consistent.
+Ocean waves are the shared pure function `sampleOcean(x, z, t)` (see Physics and
+feel). Gameplay depends on it: ships float on it, and a ball splashes where its path
+crosses the wave surface. Because both sides evaluate the same function at the same
+sim time, visuals and hits agree at any wave height.
 
 Hit detection is swept: each tick, the ball's segment from previous to new position is
-tested against every other ship's oriented hull box (in ship-local space). A ball never
+tested against every other ship's hull box in its full pose (position, heading, heel,
+pitch), in ship-local space. A ball never
 hits its own ship. The single box misses the castles fore and aft; the brick grid
 replaces it once ships are brick-built.
 
@@ -186,7 +235,9 @@ Per-frame code (render loop, interpolation, particles) is plain TypeScript with 
 per-frame allocation; Effect is used at the network edge (schema decode) only.
 
 - Ocean: vertex-displaced Gerstner mesh following the camera, using the same wave
-  parameters as `sampleOceanHeight`, with a fresnel, sun glint, and foam on crests.
+  parameters as `sampleOcean`, with a fresnel, sun glint, foam on crests, and foam
+  around hulls and in wakes. Built in C1, because the ship's motion on waves is
+  part of how sailing feels.
 - Sky: three's `Sky` shader with a low sunset sun; fog; ACES filmic tone mapping;
   bloom (so lanterns, muzzle flashes and sun glint glow).
 - Brick ships: see Brick ships below. Sails and flags use canvas-drawn pixel-art
@@ -306,8 +357,8 @@ real WebSocket path from C0 on.
 |---|---|---|
 | **Gameplay track (grey boxes)** | | |
 | C0 | Project setup only, no game code: pinned deps, folders and import rules, one `bun dev` (Bun server + Vite with `/ws` proxy), test, typecheck and shot scripts | Typecheck, a trivial test and a Playwright screenshot pass; `bun dev` starts and stops cleanly |
-| C1 | Room and 30 Hz tick loop, Schema messages; sailing sim, snapshots, interpolation, chase camera, grey-box ship; scenarios, debug hook, latency flag | Sim tests for speed, turn, boundary; Playwright holds W/D and the heading changes |
-| C2 | Aim solve, broadside, reload, ball arcs, swept hits, HP; splash, chips, boom; drifting target dummy | Landing point equals aim point; no tunneling; no self-hits; in Playwright a hit lowers HP |
+| C1 | Room and 30 Hz tick loop, Schema messages; waves in sim and Gerstner ocean on screen; ship physics (buoyancy, wind, keel, rudder, heel); snapshots, interpolation, chase camera, grey-box ship; scenarios, debug hook, latency flag | Sim tests: reaches target speeds by point of sail, turn rate, heel, floats stably in calm/beam/head-sea scenarios, boundary; Playwright holds W/D and the heading changes; Joel sails it and it feels right |
+| C2 | Aim solve, broadside, reload, recoil, ball arcs, splashes on the wave surface, swept hits against the posed hull, HP; first-pass flash, smoke, splash, chips, boom; drifting target dummy | Landing point equals aim point; no tunneling; no self-hits; in Playwright a hit lowers HP |
 | C3 | Sinking, respawn, ship–ship collision, FFA scoring, match lifecycle, HUD, kill feed | Two Playwright browsers: A sinks B; a short-timer match ends and restarts |
 | C4 | Simple bots using the same aim solve | Headless bots-only match ends with a winner in seconds; Joel plays a full round |
 | **Ship track (ship lab page, starts after C0)** | | |
@@ -315,8 +366,8 @@ real WebSocket path from C0 on.
 | S2 | Full galleon in the chosen way: hull, castles, masts, sails, cannons, lanterns | Joel approves the look; 12 copies at 120 fps |
 | S3 | Damage in the lab: click to fire at the ship | Joel approves how much breaks per hit and how a sinking-level ship looks |
 | **Merged** | | |
-| C5 | S2 ships in the game; Gerstner ocean, sky, fog, tone mapping, bloom | `bun run shot` next to ref-01; 12 ships at 120 fps, measured |
-| C6 | S3 damage in the sim; debris, smoke, WebAudio | A late joiner sees the same damage |
+| C5 | S2 ships in the game; sky, fog, tone mapping, bloom | `bun run shot` next to ref-01; 12 ships at 120 fps, measured |
+| C6 | S3 damage in the sim; brick debris physics, full gun effects and sinking sequence, WebAudio | A late joiner sees the same damage |
 | C7 | Gunport aim view | Screenshot next to ref-04 |
 | C8 | TDM, team sails, quick play menu, results screen | TDM win test |
 | C9 | UX pass: first-run controls hint, settings, pause menu, tuning | Joel's play sessions |
@@ -337,7 +388,8 @@ Known risks:
   S1 measures it before S2 starts.
 - Screenshot checks by a vision model are 64–68 % accurate; ship iteration needs
   numeric checks too, and Joel's look at S1 and S2.
-- The refs show heavy seas. Waves ≤ 1 m over a flat gameplay plane may look tame, and
-  bigger visual swell makes y = 0 splashes float. Settle at C5.
+- Ship physics on waves is the feel risk. Settle at C1 with Joel sailing it: a
+  buoyancy model can jitter, feel floaty, or fight the steering. Scenarios for calm,
+  beam sea and head sea make it testable.
 - Effect v4 is a release candidate: pin exact versions. The vendored `BunHttpServer`
   supports WebSocket upgrades.
