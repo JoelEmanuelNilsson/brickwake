@@ -180,7 +180,8 @@ space, or create one.
 
 ### Client
 
-Vite dev server proxies `/ws` to the game server. Three.js `WebGLRenderer` (WebGL2).
+Vite dev server proxies `/ws` to the game server. Vite runs under Node, not Bun:
+under Bun its `/ws` proxy never reaches the server (found at C0). Three.js `WebGLRenderer` (WebGL2).
 Per-frame code (render loop, interpolation, particles) is plain TypeScript with no
 per-frame allocation; Effect is used at the network edge (schema decode) only.
 
@@ -304,8 +305,8 @@ real WebSocket path from C0 on.
 | # | Builds | Works when |
 |---|---|---|
 | **Gameplay track (grey boxes)** | | |
-| C0 | Bun + Vite + three + Effect WebSocket, one `bun dev` | Page shows the live server tick; typecheck, tests and a Playwright smoke test pass |
-| C1 | Sailing sim, snapshots, interpolation, chase camera, grey-box ship; scenarios, debug hook, latency flag | Sim tests for speed, turn, boundary; Playwright holds W/D and the heading changes |
+| C0 | Project setup only, no game code: pinned deps, folders and import rules, one `bun dev` (Bun server + Vite with `/ws` proxy), test, typecheck and shot scripts | Typecheck, a trivial test and a Playwright screenshot pass; `bun dev` starts and stops cleanly |
+| C1 | Room and 30 Hz tick loop, Schema messages; sailing sim, snapshots, interpolation, chase camera, grey-box ship; scenarios, debug hook, latency flag | Sim tests for speed, turn, boundary; Playwright holds W/D and the heading changes |
 | C2 | Aim solve, broadside, reload, ball arcs, swept hits, HP; splash, chips, boom; drifting target dummy | Landing point equals aim point; no tunneling; no self-hits; in Playwright a hit lowers HP |
 | C3 | Sinking, respawn, ship–ship collision, FFA scoring, match lifecycle, HUD, kill feed | Two Playwright browsers: A sinks B; a short-timer match ends and restarts |
 | C4 | Simple bots using the same aim solve | Headless bots-only match ends with a winner in seconds; Joel plays a full round |
