@@ -14,6 +14,8 @@ const ship = (x: number, yaw: number): ShipSnapshot => ({
   sail: 2,
   rudderAngle: 0,
   sailSet: 1,
+  hp: 100,
+  reloadedAt: [0, 0],
 })
 
 describe("SnapshotTimeline", () => {
