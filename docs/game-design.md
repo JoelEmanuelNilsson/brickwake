@@ -35,6 +35,11 @@ the distance. `ref-04`/`ref-05` show the gun-deck view through a gunport.
   `ShipSpec`, rendered as `InstancedMesh` per part shape per ship.
 - Gameplay is built on grey-box ships while the Lego ship is built in parallel in a
   ship lab; they merge at C5.
+- Premium, not simplistic (Joel, 2026-09-25): an ultimate Lego pirate ship game with a
+  realistic feel. Every behaviour, effect and the ship's look is held to that bar. The
+  ship is a good pirate galleon in the design language of the refs (not a pixel copy)
+  with at least two gun decks. The agents decide damage per hit and all tuning; Joel
+  plays and judges once everything works, so no checkpoint waits on him.
 - Where the effort goes (Joel, 2026-09-24): physics first. High quality in: ship
   physics on waves and wind, the waves themselves, steering, firing and animation,
   gun effects, explosions and destruction, brick logic (what connects, what falls),
@@ -129,17 +134,17 @@ Sink ships to score. Sunk ships respawn.
 
 | Thing | Value |
 |---|---|
-| Ship hull (hit box) | 28 m long, 8 m beam, −2 m to +4 m about waterline |
+| Ship hull (hit box) | 28 m long, 8 m beam, −2 m to +5 m about waterline |
 | Max speed (full sail, beam reach) | 12 m/s; half sail 60 % (a target the force model is tuned to reach) |
 | Wind factor by angle to wind | ~0.2 within 45° of upwind, 1.0 beam reach, 0.8 running (target) |
 | Speed response | reaches ~63 % of target speed in ~4 s (target) |
 | Turn rate | ~12°/s at full rudder and full speed (target); comes from rudder force |
-| Guns | 8 per side, ripple broadside 60 ms apart |
+| Guns | two gun decks × 6 per side (lower ports ~1.3 m, upper ~3.3 m above waterline), ripple broadside 50 ms apart; positions live in one gun-layout module the ship spec may move |
 | Reload | 6 s per side |
 | Muzzle speed / gravity | 90 m/s / 9.81 m/s² |
 | Elevation / traverse | −4° … +12° / ±25° from perpendicular |
 | Per-gun spread | ±1°, from the match's seeded RNG |
-| Damage | 7 per ball; hull 100 HP |
+| Damage | 5 per ball; hull 100 HP |
 | Sinking / respawn | 4 s sinking (not hittable, no control), respawn 5 s later |
 | FFA | first to 10 sinks or 8 min |
 | TDM | Pirates vs Navy, first to 20 sinks or 10 min |
