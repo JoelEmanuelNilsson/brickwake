@@ -4,6 +4,8 @@ import { sampleOcean, type SeaState } from "../../sim/ocean.ts"
 import { angleOfDirection, rotate, vec3, type Quat } from "../../sim/vector.ts"
 import type { ChaseCamera } from "./chase-camera.ts"
 import type { ConnectionState } from "./connection.ts"
+import type { Effects } from "./effects.ts"
+import type { AimReading, FireOutcome, Gunnery } from "./gunnery.ts"
 import type { HelmRequest } from "./controls.ts"
 import type { FrameAverages, FrameStats } from "./frame-stats.ts"
 import type { ShipPose, SnapshotTimeline } from "./timeline.ts"
@@ -23,6 +25,16 @@ export interface DebugShip {
   readonly sailSet: number
   /** Height of the drawn water under the ship's origin at the render time. */
   readonly waterHeight: number
+  readonly hp: number
+  /** Sim time, seconds, from which `[port, starboard]` may fire again. */
+  readonly reloadedAt: readonly [number, number]
+}
+
+/** Live effects: particles per layer, chips, balls drawn in flight, and camera shake 0…1. */
+export interface DebugEffects {
+  readonly particles: ReturnType<Effects["counts"]>
+  readonly ballsInFlight: number
+  readonly shake: number
 }
 
 /** The chase camera; `roll` is the tilt of its horizon, which stays 0 whatever the ship does. */
@@ -34,7 +46,7 @@ export interface DebugCamera {
   readonly roll: number
 }
 
-/** Read-only view of the client's match on `window.brickwake`, for Playwright. Every call returns fresh plain data. */
+/** The client's match on `window.brickwake` for Playwright, plus a few test controls. Every read returns fresh plain data. */
 export interface BrickwakeDebug {
   readonly connection: ConnectionState
   readonly joined: boolean
@@ -51,6 +63,15 @@ export interface BrickwakeDebug {
   frames(): FrameAverages
   /** The last 32 events applied at their tick. */
   events(): ReadonlyArray<ServerEvent>
+  /** Where the reticle aims on the drawn sea, the facing side, and whether it can fire. */
+  aim(): AimReading | null
+  effects(): DebugEffects
+  /** Test control: fires as a left click does (headless browsers refuse the pointer lock clicks need). */
+  fire(): FireOutcome
+  /** Test control: fires the side facing `point` at that point on the sea. */
+  fireAt(point: readonly [number, number, number]): FireOutcome
+  /** Test control: sets the camera orbit as mouse and wheel do; `yaw` is the view direction (see `directionFromAngle`). */
+  orbit(yaw: number, pitch: number, distance?: number): void
 }
 
 declare global {
@@ -72,6 +93,8 @@ export interface DebugSource {
   readonly stats: () => FrameStats
   readonly events: () => ReadonlyArray<ServerEvent>
   readonly sea: () => SeaState | undefined
+  readonly gunnery: () => Gunnery
+  readonly effects: () => Effects
 }
 
 const describeShip = (id: string, pose: ShipPose, sea: SeaState | undefined, time: number): DebugShip => {
@@ -91,6 +114,8 @@ const describeShip = (id: string, pose: ShipPose, sea: SeaState | undefined, tim
     rudderAngle: pose.rudderAngle,
     sailSet: pose.sailSet,
     waterHeight: sea === undefined ? 0 : sampleOcean(sea, pose.x, pose.z, time).height,
+    hp: pose.hp,
+    reloadedAt: [pose.reloadPort, pose.reloadStarboard],
   }
 }
 
@@ -135,6 +160,21 @@ export const installDebugHook = (source: DebugSource): void => {
     helm: () => source.helm() ?? null,
     frames: () => source.stats().averages(),
     events: () => [...source.events()],
+    aim: () => (source.pose(source.shipId() ?? "") === undefined ? null : source.gunnery().aim()),
+    effects: () => ({
+      particles: source.effects().counts(),
+      ballsInFlight: source.gunnery().balls.inFlight,
+      shake: source.camera()?.trauma ?? 0,
+    }),
+    fire: () => source.gunnery().fire(),
+    fireAt: ([x, y, z]) => source.gunnery().fire({ x, y, z }),
+    orbit: (yaw, pitch, distance) => {
+      const chase = source.camera()
+      if (chase === undefined) return
+      chase.yaw = yaw + Math.PI
+      chase.pitch = pitch
+      if (distance !== undefined) chase.distance = distance
+    },
   }
   Object.defineProperty(window, "brickwake", { value: Object.freeze(hook), writable: false, configurable: false })
 }

@@ -9,7 +9,7 @@ import * as Server from "../src/server/server.ts"
 const degrees = 180 / Math.PI
 
 const check = (ok: boolean, message: string) => {
-  if (!ok) throw new Error(`C1 check failed: ${message}`)
+  if (!ok) throw new Error(`check failed: ${message}`)
 }
 
 const hook = <A>(page: Page, read: (hook: BrickwakeDebug) => A): Promise<A> =>
@@ -94,6 +94,133 @@ const sail = async (browser: Browser, url: string) => {
   ].join("\n")
 }
 
+const shipById = async (page: Page, id: string) => {
+  const ship = await page.evaluate((id) => window.brickwake?.ships().find((s) => s.id === id) ?? null, id)
+  if (ship === null) throw new Error(`the client draws no ship ${id}`)
+  return ship
+}
+
+/** Yaw angle of the direction from `a` to `b` (see `directionFromAngle`). */
+const bearing = (a: readonly [number, number, number], b: readonly [number, number, number]) => Math.atan2(-(b[2] - a[2]), b[0] - a[0])
+
+/** Turns the camera toward `yaw` and searches its pitch until the reticle's aim point is `range` metres from the ship. */
+const aimAtRange = async (page: Page, yaw: number, range: number) => {
+  let low = -0.08
+  let high = 0.6
+  for (let i = 0; i < 14; i++) {
+    const pitch = (low + high) / 2
+    await page.evaluate(([yaw, pitch]) => window.brickwake?.orbit(yaw, pitch), [yaw, pitch] as const)
+    await page.waitForTimeout(60)
+    const aim = await hook(page, (h) => h.aim())
+    // Steeper looks land nearer; no aim means the ray passed over the sea's edge of range.
+    if (aim?.aimPoint == null || aim.range > range) low = pitch
+    else high = pitch
+  }
+  const aim = await hook(page, (h) => h.aim())
+  if (aim?.aimPoint == null) throw new Error("the reticle found no sea to aim at")
+  return aim
+}
+
+const waitFor = async (page: Page, read: (h: BrickwakeDebug) => boolean, timeout: number) => {
+  const started = Date.now()
+  while (Date.now() - started < timeout) {
+    if (await hook(page, read)) return true
+    await page.waitForTimeout(40)
+  }
+  return false
+}
+
+/** Plays C2 in the browser: aim at the drifting dummy from the reticle, fire the broadside, see it hit; then splash a broadside into open sea. */
+const gunnery = async (browser: Browser, url: string) => {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } })
+  await page.goto(`${url}?scenario=target-dummy`)
+  await page.waitForFunction(() => window.brickwake?.joined === true && window.brickwake.ships().length === 2, undefined, { timeout: 15_000 })
+  await page.mouse.click(640, 360)
+  await page.waitForTimeout(500)
+  const own = await ownShip(page)
+  const dummy = await shipById(page, "dummy")
+  const distance = Math.hypot(dummy.position[0] - own.position[0], dummy.position[2] - own.position[2])
+  const aim = await aimAtRange(page, bearing(own.position, dummy.position), distance)
+  check(aim.side === "starboard" && aim.state === "ready", `the reticle faces the dummy ready to fire (${aim.side}, ${aim.state})`)
+  await page.screenshot({ path: ".shots/c2-aim.png" })
+
+  const outcome = await hook(page, (h) => h.fire())
+  check(outcome === "fired", `the broadside fires at the reticle (${outcome})`)
+  const reloading = await hook(page, (h) => h.aim())
+  check(reloading?.state === "reloading", `the reticle shows the reload right after firing (${reloading?.state})`)
+  // From off the starboard bow the battery fires across the view and its smoke rolls out toward the dummy.
+  await page.evaluate((yaw) => window.brickwake?.orbit(yaw, 0.2, 48), own.heading + Math.PI - 1.2)
+  check(await waitFor(page, (h) => h.effects().ballsInFlight > 0, 3000), "the fire events render balls")
+  const burst = await hook(page, (h) => h.effects())
+  for (const [i, wait] of [80, 150, 300, 900].entries()) {
+    await page.screenshot({ path: `.shots/c2-broadside-${i + 1}.png` })
+    await page.waitForTimeout(wait)
+  }
+  check(burst.particles.fire > 0 && burst.particles.smoke > 20 && burst.shake > 0, `flash, smoke and shake play on firing (${JSON.stringify(burst)})`)
+  check(await waitFor(page, (h) => (h.ships().find((s) => s.id === "dummy")?.hp ?? 100) < 100, 6000), "a hit lowers the dummy's HP")
+  // Looking past the bow keeps the own hull out of the way of the dummy.
+  await page.evaluate((yaw) => window.brickwake?.orbit(yaw, 0.1, 30), bearing(own.position, dummy.position) + 0.45)
+  await waitFor(page, (h) => h.effects().particles.chips > 0, 1000)
+  await page.waitForTimeout(120)
+  const impact = await hook(page, (h) => h.effects())
+  await page.screenshot({ path: ".shots/c2-impact.png" })
+  const hit = await shipById(page, "dummy")
+  const hits = await hook(page, (h) => h.events().filter((e) => e._tag === "ballHit").length)
+  await page.waitForTimeout(1500)
+  await page.screenshot({ path: ".shots/c2-smoke.png" })
+  const frames = await hook(page, (h) => h.frames())
+
+  // Out of reach and then, reloaded, into open sea to port.
+  const heading = (await ownShip(page)).heading
+  await aimAtRange(page, heading + Math.PI / 2, 250)
+  await page.waitForFunction(() => (window.brickwake?.aim()?.reloadLeft ?? 1) === 0, undefined, { timeout: 8000 })
+  const far = await page.evaluate(() => {
+    const own = window.brickwake?.ownShip()
+    return own ? window.brickwake?.fireAt([own.position[0] + 20, 0, own.position[2] - 900]) : undefined
+  })
+  check(far === "out-of-range", `a point 900 m off is refused as out of range (${far})`)
+  const port = await aimAtRange(page, heading + Math.PI / 2, 120)
+  check(port.side === "port", `turning the view to port faces the port battery (${port.side})`)
+  const lastBall = await hook(page, (h) => Math.max(-1, ...h.events().flatMap((e) => (e._tag === "cannonFired" ? [e.ballId] : []))))
+  check((await hook(page, (h) => h.fire())) === "fired", "the port broadside fires")
+  // The guns converge on the aim point, so the splashes group there; from high over the starboard side the
+  // line of sight to them passes over the smoke bank.
+  await page.evaluate((yaw) => window.brickwake?.orbit(yaw, 0.3, 60), heading + Math.PI / 2 - 0.5)
+  const splashed = await page.waitForFunction(
+    (last) => window.brickwake?.events().some((e) => e._tag === "ballSplash" && e.ballId > last) === true,
+    lastBall,
+    { timeout: 6000 },
+  )
+  check(splashed !== null, "the port broadside splashes")
+  await page.waitForTimeout(600)
+  await page.screenshot({ path: ".shots/c2-splashes.png" })
+  const splashes = await hook(page, (h) => h.events().filter((e) => e._tag === "ballSplash").length)
+  await page.close()
+
+  // Joel's display, camera inside the smoke bank of a broadside: the heaviest overdraw firing makes.
+  const big = await browser.newPage({ viewport: { width: 1728, height: 1117 }, deviceScaleFactor: 2 })
+  await big.goto(`${url}?scenario=target-dummy`)
+  await big.waitForFunction(() => window.brickwake?.joined === true && window.brickwake.ships().length === 2, undefined, { timeout: 15_000 })
+  await big.mouse.click(864, 558)
+  await big.waitForTimeout(500)
+  const bigOwn = await ownShip(big)
+  check((await big.evaluate(([x, z]) => window.brickwake?.fireAt([x, 0, z + 150]), [bigOwn.position[0], bigOwn.position[2]] as const)) === "fired", "the big-screen broadside fires")
+  await big.evaluate((yaw) => window.brickwake?.orbit(yaw, 0.15, 30), bigOwn.heading + Math.PI - 1.3)
+  await big.waitForTimeout(2600)
+  const smokeFrames = await hook(big, (h) => h.frames())
+  await big.screenshot({ path: ".shots/c2-smoke-bank.png" })
+  await big.close()
+
+  return [
+    `dummy at ${distance.toFixed(0)} m: HP ${hit.hp} after ${hits} hits; reticle aim ${aim.range.toFixed(1)} m`,
+    `effects at impact: ${JSON.stringify(impact)}`,
+    `port broadside into open sea: ${splashes} splash events`,
+    `frames (effects): cpu ${frames.cpuMs.toFixed(2)} ms, gpu ${frames.gpuMs.toFixed(2)} ms, interval ${frames.intervalMs.toFixed(2)} ms`,
+    `frames (in the smoke bank, 2592×1676): cpu ${smokeFrames.cpuMs.toFixed(2)} ms, gpu ${smokeFrames.gpuMs.toFixed(2)} ms, interval ${smokeFrames.intervalMs.toFixed(2)} ms`,
+    "saved .shots/c2-{aim,broadside-1..4,impact,smoke,splashes,smoke-bank}.png",
+  ].join("\n")
+}
+
 const freePort = async () => {
   const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() })
   const port = probe.port
@@ -127,6 +254,11 @@ Effect.gen(function* () {
     Effect.promise(() => chromium.launch({ args: ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist"] })),
     (browser) => Effect.promise(() => browser.close()),
   )
-  const report = yield* Effect.promise(() => sail(browser, url))
-  yield* Effect.log(report)
+  const checks = { c1: sail, c2: gunnery }
+  const wanted = process.argv.slice(2)
+  for (const [name, run] of Object.entries(checks)) {
+    if (wanted.length > 0 && !wanted.includes(name)) continue
+    const report = yield* Effect.promise(() => run(browser, url))
+    yield* Effect.log(`${name}\n${report}`)
+  }
 }).pipe(Effect.scoped, Effect.provide(Server.layer({ port: 0 })), BunRuntime.runMain)

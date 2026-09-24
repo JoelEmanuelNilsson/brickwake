@@ -64,10 +64,21 @@ const flightTerms = (tau: number) => {
   return { carry, fall: (tau - carry) / drag }
 }
 
+/** Writes `ballPositionAt(ball, t)` into `out` without allocating, for the client's per-frame ball rendering. */
+export const writeBallPosition = (ball: Cannonball, t: number, out: { x: number; y: number; z: number }): void => {
+  const tau = Math.max(0, t - ball.firedAt)
+  const carry = drag === 0 ? tau : -Math.expm1(-drag * tau) / drag
+  const fall = drag === 0 ? (tau * tau) / 2 : (tau - carry) / drag
+  out.x = ball.origin.x + ball.velocity.x * carry + gravity.x * fall
+  out.y = ball.origin.y + ball.velocity.y * carry + gravity.y * fall
+  out.z = ball.origin.z + ball.velocity.z * carry + gravity.z * fall
+}
+
 /** World position of a ball at sim time `t` seconds (its origin before it is fired). Shared by the sim's hit sweep and client rendering. */
 export const ballPositionAt = (ball: Cannonball, t: number): Vec3 => {
-  const { carry, fall } = flightTerms(Math.max(0, t - ball.firedAt))
-  return add(ball.origin, add(scale(ball.velocity, carry), scale(gravity, fall)))
+  const out = vec3(0, 0, 0)
+  writeBallPosition(ball, t, out)
+  return out
 }
 
 /** World velocity of a ball at sim time `t` seconds. */

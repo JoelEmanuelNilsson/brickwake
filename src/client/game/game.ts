@@ -18,13 +18,17 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js"
 import type { ScenarioName } from "../../sim/scenarios.ts"
 import type { ServerEvent, ServerMessage, WindSnapshot } from "../../protocol/messages.ts"
 import { createSunsetSky } from "../lab/sky.ts"
+import { GameAudio } from "./audio.ts"
 import { ChaseCamera } from "./chase-camera.ts"
 import { connect, type Connection } from "./connection.ts"
 import { Controls } from "./controls.ts"
 import { installDebugHook } from "./debug-hook.ts"
+import { Effects } from "./effects.ts"
 import { FrameStats } from "./frame-stats.ts"
+import { Gunnery } from "./gunnery.ts"
 import { Hud, type HudReading } from "./hud.ts"
 import { OceanSurface } from "./ocean.ts"
+import { Reticle } from "./reticle.ts"
 import { ShipView } from "./ship-view.ts"
 import { EventQueue, SnapshotTimeline } from "./timeline.ts"
 
@@ -43,6 +47,14 @@ export type FrameHook = (frame: FrameContext) => void
 
 /** Handles a server event once the render clock reaches its tick. */
 export type EventHandler = (event: ServerEvent) => void
+
+/** The page elements the game draws its interface into. */
+export interface GameElements {
+  readonly hud: HTMLElement
+  readonly overlay: HTMLElement
+  readonly status: HTMLElement
+  readonly reticle: HTMLElement
+}
 
 /** Sky colours in linear HDR, equal to the lab sky dome's constants so water, fog and sky meet without a seam. */
 const sky = {
@@ -82,6 +94,9 @@ export class Game {
   #camera: ChaseCamera | undefined
   #controls: Controls | undefined
   readonly #hud: Hud
+  /** Gun and impact effects; later systems (debris, sinking) add their own through it. */
+  readonly effects: Effects
+  readonly #gunnery: Gunnery
   #ocean: OceanSurface | undefined
   #timeline: SnapshotTimeline | undefined
   #events = new EventQueue<ServerEvent>()
@@ -94,11 +109,11 @@ export class Game {
 
   readonly canvas: HTMLCanvasElement
   readonly #orbit: number
-  readonly elements: { readonly hud: HTMLElement; readonly overlay: HTMLElement; readonly status: HTMLElement }
+  readonly elements: GameElements
 
   constructor(
     canvas: HTMLCanvasElement,
-    elements: { readonly hud: HTMLElement; readonly overlay: HTMLElement; readonly status: HTMLElement },
+    elements: GameElements,
     options: { readonly scenario: ScenarioName | undefined; readonly pixelRatio: number; readonly orbit: number },
   ) {
     this.canvas = canvas
@@ -126,6 +141,16 @@ export class Game {
     const sun = new DirectionalLight(0xffb27a, 3.2)
     sun.position.copy(sky.sunDirection).multiplyScalar(100)
     this.scene.add(sun, new HemisphereLight(0xffc49a, 0x0b2a30, 1.1))
+    this.effects = new Effects(this.scene, sky.sunDirection)
+    this.#gunnery = new Gunnery({
+      scene: this.scene,
+      effects: this.effects,
+      reticle: new Reticle(elements.reticle),
+      audio: new GameAudio(),
+      send: (message) => this.#connection.send(message),
+      ownId: () => this.#shipId,
+    })
+    this.eventHandlers.push((event) => this.#gunnery.onEvent(event))
 
     window.addEventListener("resize", () => this.#resize())
     elements.overlay.addEventListener("click", () => this.#setSail())
@@ -155,6 +180,8 @@ export class Game {
       stats: () => this.#stats,
       events: () => this.#appliedEvents,
       sea: () => this.#ocean?.sea,
+      gunnery: () => this.#gunnery,
+      effects: () => this.effects,
     })
     this.#resize()
     this.renderer.setAnimationLoop((ms) => this.#renderFrame(ms))
@@ -197,7 +224,7 @@ export class Game {
           const [x, y, z, w] = own.orientation
           camera.placeBehind(Math.atan2(-2 * (x * z - w * y), 1 - 2 * (y * y + z * z)) + this.#orbit)
         }
-        this.#controls ??= new Controls(this.canvas, camera, (m) => this.#connection.send(m))
+        this.#controls ??= new Controls(this.canvas, camera, (m) => this.#connection.send(m), () => this.#gunnery.fire())
         this.#controls.active = this.#sailing
         if (own !== undefined) this.#controls.syncSail(own.sail)
         this.#resize()
@@ -281,6 +308,11 @@ export class Game {
       this.elements.hud.hidden = !this.#sailing
     }
     ocean.update(renderTime, camera.camera.position.x, camera.camera.position.z)
+    camera.camera.updateMatrixWorld()
+    this.#gunnery.update(dt, renderTime, own?.view.pose, camera, ocean.sea, this.#sailing)
+    const windX = Math.cos(this.#wind.toward) * this.#wind.speed
+    const windZ = -Math.sin(this.#wind.toward) * this.#wind.speed
+    this.effects.update(dt, renderTime, windX, windZ, ocean.sea, camera.camera)
     for (let i = 0; i < this.hooks.length; i++) this.hooks[i]?.(frame)
 
     this.#stats.beginGpu()

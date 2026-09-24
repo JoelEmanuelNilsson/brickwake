@@ -69,18 +69,48 @@ export const gerstnerPoint = (sea: SeaState, x0: number, z0: number, t: number):
 
 const inversionIterations = 4
 
-/** Samples the water surface above world point (x, z) at sim time t seconds. Pure; shared by sim and client. */
-export const sampleOcean = (sea: SeaState, x: number, z: number, t: number): OceanSample => {
-  if (sea.waves.length === 0) return { height: 0, normal: vec3(0, 1, 0), velocity: vec3(0, 0, 0) }
-  // Gerstner waves move particles sideways, so find the rest position that lands on (x, z).
-  // The map is a contraction because total steepness < 1; a few fixed-point steps converge.
+// Rest position found by `findRest`; module scratch so per-frame client callers allocate nothing.
+const rest = { x0: 0, z0: 0 }
+
+// Gerstner waves move particles sideways, so find the rest position that lands on (x, z).
+// The map is a contraction because total steepness < 1; a few fixed-point steps converge.
+const findRest = (sea: SeaState, x: number, z: number, t: number) => {
   let x0 = x
   let z0 = z
   for (let i = 0; i < inversionIterations; i++) {
-    const p = gerstnerPoint(sea, x0, z0, t)
-    x0 += x - p.x
-    z0 += z - p.z
+    let px = x0
+    let pz = z0
+    for (const wave of sea.waves) {
+      const dx = Math.cos(wave.direction)
+      const dz = -Math.sin(wave.direction)
+      const theta = waveNumber(wave) * (dx * x0 + dz * z0) - waveAngularFrequency(wave) * t + wave.phase
+      const sway = wave.sharpness * wave.amplitude * Math.sin(theta)
+      px -= dx * sway
+      pz -= dz * sway
+    }
+    x0 += x - px
+    z0 += z - pz
   }
+  rest.x0 = x0
+  rest.z0 = z0
+}
+
+/** Height of the water surface above world point (x, z) at sim time t: `sampleOcean(…).height` without allocating, for per-frame client use. */
+export const oceanHeight = (sea: SeaState, x: number, z: number, t: number): number => {
+  findRest(sea, x, z, t)
+  let height = 0
+  for (const wave of sea.waves) {
+    const theta = waveNumber(wave) * (Math.cos(wave.direction) * rest.x0 - Math.sin(wave.direction) * rest.z0) - waveAngularFrequency(wave) * t + wave.phase
+    height += wave.amplitude * Math.cos(theta)
+  }
+  return height
+}
+
+/** Samples the water surface above world point (x, z) at sim time t seconds. Pure; shared by sim and client. */
+export const sampleOcean = (sea: SeaState, x: number, z: number, t: number): OceanSample => {
+  if (sea.waves.length === 0) return { height: 0, normal: vec3(0, 1, 0), velocity: vec3(0, 0, 0) }
+  findRest(sea, x, z, t)
+  const { x0, z0 } = rest
   let height = 0
   let vx = 0
   let vy = 0

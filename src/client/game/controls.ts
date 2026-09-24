@@ -12,7 +12,7 @@ const raise: Record<SailLevel, SailLevel> = { 0: 1, 1: 2, 2: 2 }
 const lower: Record<SailLevel, SailLevel> = { 0: 0, 1: 0, 2: 1 }
 
 /**
- * Keyboard helm (W/S sail a level, A/D held rudder) and pointer-locked mouse orbit. Input counts only
+ * Keyboard helm (W/S sail a level, A/D held rudder), pointer-locked mouse orbit and left-click fire. Input counts only
  * once `active` is true, after the player's first click.
  */
 export class Controls {
@@ -23,7 +23,7 @@ export class Controls {
   active = false
   readonly #send: (message: ClientMessage) => void
 
-  constructor(element: HTMLElement, camera: ChaseCamera, send: (message: ClientMessage) => void) {
+  constructor(element: HTMLElement, camera: ChaseCamera, send: (message: ClientMessage) => void, fire: () => void) {
     this.#send = send
     window.addEventListener("keydown", (event) => {
       if (!this.active) return
@@ -61,6 +61,10 @@ export class Controls {
     })
     element.addEventListener("mousemove", (event) => {
       if (document.pointerLockElement === element) camera.look(event.movementX, event.movementY)
+    })
+    // Without pointer lock the click is the one that asks for it, not a shot.
+    element.addEventListener("mousedown", (event) => {
+      if (this.active && event.button === 0 && document.pointerLockElement === element) fire()
     })
     element.addEventListener("wheel", (event) => camera.zoom(event.deltaY), { passive: true })
   }
