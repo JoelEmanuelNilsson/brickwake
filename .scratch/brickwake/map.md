@@ -51,6 +51,7 @@ flowchart LR
 ## Decisions so far
 
 - [Sim: ocean and ship physics](issues/01-sim-ocean-and-ship-physics.md) — force-based ship on `sampleOcean(sea,…)`; targets met (12 m/s beam reach, 12.3°/s turn, 8.3° heel); axes +x bow/+z starboard; fixed SIM_DT.
+- [Ship lab and part library](issues/08-ship-lab-and-parts.md) — 51 LDraw-keyed chamfered shapes in `src/client/bricks/`, instanced per shape with swap-remove; 60 tris/brick means hulls must cull enclosed parts and covered studs.
 
 ## Not yet specified
 
