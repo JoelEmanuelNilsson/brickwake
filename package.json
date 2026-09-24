@@ -7,7 +7,8 @@
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "shot": "bun scripts/shot.ts",
-    "shot:lab": "bun scripts/shot-lab.ts"
+    "shot:lab": "bun scripts/shot-lab.ts",
+    "shot:hull": "bun scripts/shot-hull.ts"
   },
   "dependencies": {
     "@effect/platform-bun": "4.0.0-rc.115",

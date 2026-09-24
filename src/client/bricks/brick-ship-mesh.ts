@@ -1,7 +1,8 @@
 import { type BufferGeometry, Color, Group, InstancedMesh, type Material, Matrix4, MeshStandardMaterial } from "three"
-import { type BrickColor, brickColors } from "./colors.ts"
-import { metresPerLdu } from "./geometry.ts"
-import { type PartId, buildPartGeometry, buildStudGeometry, partShapes } from "./parts.ts"
+import type { BrickColor } from "../../sim/ship/colors.ts"
+import { brickColors } from "./colors.ts"
+import { metresPerLdu, type PartId, partCatalog } from "../../sim/ship/parts.ts"
+import { buildPartGeometry, buildStudGeometry } from "./parts.ts"
 
 /** One part of a ship: shape, colour, ship-space transform in metres, and which of its studs are covered. */
 export interface BrickPlacement {
@@ -31,7 +32,7 @@ export const createBrickLibrary = (): BrickLibrary => {
       .replace("#include <color_vertex>", pearlFromInstanceColor)
     shader.fragmentShader = shader.fragmentShader
       .replace("#include <common>", "#include <common>\nvarying float vFinish;")
-      .replace("#include <metalnessmap_fragment>", "#include <metalnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.34, vFinish);\nmetalnessFactor = mix(metalnessFactor, 0.65, vFinish);")
+      .replace("#include <metalnessmap_fragment>", "#include <metalnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.34, vFinish);\nmetalnessFactor = mix(metalnessFactor, 0.45, vFinish);")
   }
   plastic.customProgramCacheKey = () => "brick-plastic-pearl"
   const glow = new MeshStandardMaterial({ color: 0x331a05, emissive: 0xff9433, emissiveIntensity: 9, roughness: 0.15 })
@@ -158,7 +159,7 @@ export class BrickShipMesh {
     this.studStart = new Int32Array(placements.length + 1)
     placements.forEach((placement, i) => {
       perShape.set(placement.part, (perShape.get(placement.part) ?? 0) + 1)
-      this.studStart[i + 1] = (this.studStart[i] ?? 0) + partShapes[placement.part].studs.length
+      this.studStart[i + 1] = (this.studStart[i] ?? 0) + partCatalog[placement.part].studs.length
     })
     const studCount = this.studStart[placements.length] ?? 0
     for (const [part, capacity] of perShape) {
@@ -182,7 +183,7 @@ export class BrickShipMesh {
     placements.forEach((placement, i) => {
       this.partSlot[i] = this.poolOf(placement.part).add(i, placement.matrix, linear(placement.color), false)
       const hidden = placement.hiddenStuds ?? []
-      const count = partShapes[placement.part].studs.length
+      const count = partCatalog[placement.part].studs.length
       for (let s = 0; s < count; s++) if (!hidden.includes(s)) this.showStud(i, s, false)
     })
     this.present = placements.length
@@ -254,7 +255,7 @@ export class BrickShipMesh {
   private showStud(index: number, stud: number, upload: boolean) {
     const placement = this.placements[index]
     if (placement === undefined) return
-    const offset = partShapes[placement.part].studs[stud]
+    const offset = partCatalog[placement.part].studs[stud]
     if (offset === undefined) return
     const [x, y, z] = offset
     scratchStud.makeTranslation(x * metresPerLdu, y * metresPerLdu, z * metresPerLdu)

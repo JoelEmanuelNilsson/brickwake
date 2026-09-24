@@ -1,13 +1,6 @@
 import { BufferGeometry, Float32BufferAttribute, Matrix4, Vector3 } from "three"
 import { toCreasedNormals } from "three/addons/utils/BufferGeometryUtils.js"
-
-/** A 2D point in LDraw units (LDU). */
-export type Point2 = readonly [number, number]
-/** A 3D point in LDraw units (LDU), part-local frame with y up. */
-export type Point3 = readonly [number, number, number]
-
-/** Metres per LDraw unit: a 20 LDU stud pitch is 0.4 m at minifig scale. */
-export const metresPerLdu = 0.02
+import { metresPerLdu, type Point2, type Point3 } from "../../sim/ship/parts.ts"
 
 /** Width of the 45° chamfer on every part edge, in LDU; it makes the highlight and the seam groove between parts. */
 export const edgeChamfer = 1
