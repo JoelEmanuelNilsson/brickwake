@@ -10,9 +10,11 @@ export default defineConfig({
     proxy: { "/ws": { target: `ws://127.0.0.1:${serverPort}`, ws: true } },
   },
   build: {
-    // One entry per page; the ship lab adds `lab: "lab.html"` here.
     rolldownOptions: {
-      input: { main: fileURLToPath(new URL("index.html", import.meta.url)) },
+      input: {
+        main: fileURLToPath(new URL("index.html", import.meta.url)),
+        lab: fileURLToPath(new URL("lab.html", import.meta.url)),
+      },
     },
   },
 })

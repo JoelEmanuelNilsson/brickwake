@@ -6,7 +6,8 @@
     "dev": "bun scripts/dev.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "shot": "bun scripts/shot.ts"
+    "shot": "bun scripts/shot.ts",
+    "shot:lab": "bun scripts/shot-lab.ts"
   },
   "dependencies": {
     "@effect/platform-bun": "4.0.0-rc.115",
