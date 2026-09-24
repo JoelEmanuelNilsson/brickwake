@@ -53,6 +53,7 @@ flowchart LR
 - [Sim: ocean and ship physics](issues/01-sim-ocean-and-ship-physics.md) — force-based ship on `sampleOcean(sea,…)`; targets met (12 m/s beam reach, 12.3°/s turn, 8.3° heel); axes +x bow/+z starboard; fixed SIM_DT.
 - [Ship lab and part library](issues/08-ship-lab-and-parts.md) — 51 LDraw-keyed chamfered shapes in `src/client/bricks/`, instanced per shape with swap-remove; 60 tris/brick means hulls must cull enclosed parts and covered studs.
 - [Server: room, tick loop and protocol](issues/02-server-room-and-protocol.md) — `/ws` join→welcome(sea, wind, ships)→30 Hz snapshots with ticked events; scenario rooms for tests; NET_LATENCY_MS/NET_JITTER_MS; 181 B/ship.
+- [Sim: gunnery and hits](issues/04-sim-gunnery.md) — `aimGun`/`broadsideRefusal` shared aim solve, drag 0.04/s, ~300 m max range, 1° cone spread (±18 m in range at 220 m — revisit in 19), fire/hit/splash events on the wire.
 
 ## Not yet specified
 
