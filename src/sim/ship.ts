@@ -61,6 +61,10 @@ export interface ShipState {
   readonly rudderAngle: number
   /** Canvas set, 0 furled … 1 full. */
   readonly sailSet: number
+  /** Hull hit points, `tuning.damage.hullHp` … 0. */
+  readonly hp: number
+  /** Sim time, seconds, from which each side's guns may fire again. */
+  readonly reloadedAt: { readonly port: number; readonly starboard: number }
 }
 
 /** Heading, pitch and heel of a ship, in radians. */
@@ -95,7 +99,29 @@ export const makeShip = (
   controls: options.controls ?? { rudder: 0, sail: 0 },
   rudderAngle: 0,
   sailSet: tuning.sail.setByLevel[options.controls?.sail ?? 0],
+  hp: tuning.damage.hullHp,
+  reloadedAt: { port: 0, starboard: 0 },
 })
+
+/** Applies an instantaneous world impulse (N·s) at a ship-local point, with the same added mass the body integrates with. */
+export const applyImpulse = (ship: ShipState, local: Vec3, impulse: Vec3, hull: Hull = defaultHull): ShipState => {
+  const q = ship.orientation
+  const added = tuning.hull.addedMass
+  const addedI = tuning.hull.addedInertia
+  const j = rotateInverse(q, impulse)
+  const dv = vec3(
+    j.x / (hull.mass * (1 + added.surge)),
+    j.y / (hull.mass * (1 + added.heave)),
+    j.z / (hull.mass * (1 + added.sway)),
+  )
+  const l = cross(sub(local, hull.centerOfMass), j)
+  const dw = vec3(
+    l.x / (hull.inertia.x * (1 + addedI.roll)),
+    l.y / (hull.inertia.y * (1 + addedI.yaw)),
+    l.z / (hull.inertia.z * (1 + addedI.pitch)),
+  )
+  return { ...ship, velocity: add(ship.velocity, rotate(q, dv)), angularVelocity: add(ship.angularVelocity, rotate(q, dw)) }
+}
 
 /** World position of a ship-local point. */
 export const shipPointToWorld = (ship: ShipState, local: Vec3): Vec3 => add(ship.position, rotate(ship.orientation, local))

@@ -130,6 +130,34 @@ export const tuning = {
   guns: {
     /** Seconds between guns in a ripple broadside. */
     rippleInterval: 0.05,
+    /** Seconds from a broadside order until that side may fire again. */
+    reload: 6,
+    /** Ball speed relative to the muzzle, m/s. */
+    muzzleSpeed: 90,
+    /**
+     * Linear air drag rate, 1/s. A 24-pounder's quadratic drag at muzzle speed decelerates it about 4 % per second;
+     * the linear form keeps `ballPositionAt` closed-form.
+     */
+    airDrag: 0.04,
+    /** Barrel elevation above the deck plane, radians. */
+    elevation: { min: -4 * degrees, max: 12 * degrees },
+    /** Barrel traverse either side of straight out of the port, radians. */
+    traverse: 25 * degrees,
+    /** Per-gun random error: the barrel points uniformly within a cone of this half-angle about its lay, radians. */
+    spread: 1 * degrees,
+    /**
+     * Recoil impulse each gun gives the ship, N·s. About four times a real 24-pounder's ball-plus-powder momentum,
+     * so a broadside visibly rocks the ship (about 1° of roll).
+     */
+    recoilImpulse: 7000,
+    /** A guard: balls always meet the sea long before this, seconds. */
+    maxFlightSeconds: 20,
+  },
+  damage: {
+    /** Hull HP a ship starts with. */
+    hullHp: 100,
+    /** HP one ball takes off the hull it hits. */
+    perBall: 5,
   },
   match: {
     /** Ships a room holds, humans and bots together. */

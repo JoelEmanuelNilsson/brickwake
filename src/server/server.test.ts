@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import { Cause, Effect, Exit, Layer, ManagedRuntime, Schema } from "effect"
 import { HttpServer } from "effect/unstable/http"
-import { ServerMessageJson, type ServerMessage } from "../protocol/messages.ts"
+import { ballFromWire, ServerMessageJson, type ServerMessage } from "../protocol/messages.ts"
+import { ballPositionAt } from "../sim/gunnery.ts"
 import { seas, swell } from "../sim/ocean.ts"
-import { scenarioShipId } from "../sim/scenarios.ts"
+import { dummyShipId, scenarioShipId } from "../sim/scenarios.ts"
 import { SIM_HZ } from "../sim/tuning.ts"
 import type { NetworkLag } from "./lag.ts"
 import * as Server from "./server.ts"
@@ -248,4 +249,32 @@ test("injected latency delays both directions", async () => {
   } finally {
     await lagged.dispose()
   }
+})
+
+test("a broadside at the target dummy fires, hits and lowers its HP; refusals say why", async () => {
+  const client = await connect(server.url)
+  client.send({ _tag: "join", mode: "ffa", scenario: "target-dummy" })
+  const welcome = await client.nextOf("welcome", 0)
+  const dummy = welcome.ships.find((ship) => ship.id === dummyShipId)!
+  expect(dummy.hp).toBe(100)
+  client.send({ _tag: "fireBroadside", side: "port", aimPoint: [0, 0, 150] })
+  await client.next(
+    (message): message is Snapshot => message._tag === "snapshot" && message.events.some((event) => event._tag === "broadsideRefused"),
+  )
+  client.send({ _tag: "fireBroadside", side: "starboard", aimPoint: [dummy.position[0], 0, dummy.position[2]] })
+  await sleep(2500)
+  const events = client.snapshots().flatMap(({ snapshot }) => snapshot.events)
+  expect(events.filter((event) => event._tag === "broadsideRefused")).toMatchObject([{ side: "port", reason: "out-of-arc" }])
+  const fired = events.flatMap((event) => (event._tag === "cannonFired" ? [ballFromWire(event)] : []))
+  expect(fired).toHaveLength(12)
+  const hits = events.flatMap((event) => (event._tag === "ballHit" ? [event] : []))
+  expect(hits.length).toBeGreaterThan(0)
+  for (const hit of hits) {
+    const ball = fired.find((candidate) => candidate.id === hit.ballId)!
+    const at = ballPositionAt(ball, hit.time)
+    expect(Math.hypot(at.x - hit.point[0], at.y - hit.point[1], at.z - hit.point[2])).toBeLessThan(0.01)
+  }
+  const last = client.snapshots().at(-1)!.snapshot.ships.find((ship) => ship.id === dummyShipId)!
+  expect(last.hp).toBe(100 - 5 * hits.length)
+  await client.close()
 })

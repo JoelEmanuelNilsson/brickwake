@@ -6,6 +6,9 @@ import { makeWind } from "./wind.ts"
 /** The ship every single-ship scenario spawns, at the origin heading +x. */
 export const scenarioShipId = shipId("player")
 
+/** The target ship of the `target-dummy` scenario. */
+export const dummyShipId = shipId("dummy")
+
 const quarter = Math.PI / 2
 const solo = [{ id: scenarioShipId, x: 0, z: 0, heading: 0 }] as const
 
@@ -22,6 +25,13 @@ export const scenarios = {
   "head-sea": createMatch({ seed: 3, sea: swell(Math.PI), wind: makeWind({ toward: -quarter, speed: 14, gustiness: 0 }), ships: solo }),
   /** The match sea and a gusty wind. */
   "open-sea": createMatch({ seed: 4, sea: seas.open, wind: makeWind({ toward: -quarter, speed: 14, gustiness: 1 }), ships: solo }),
+  /** Flat water with an unmanned ship 150 m off the starboard beam, close-hauled under half sail: it drifts at ~1.4 m/s. */
+  "target-dummy": createMatch({
+    seed: 5,
+    sea: seas.calm,
+    wind: makeWind({ toward: -quarter, speed: 14, gustiness: 0 }),
+    ships: [...solo, { id: dummyShipId, x: 0, z: 150, heading: quarter / 2, controls: { rudder: 0, sail: 1 } }],
+  }),
 } as const satisfies Record<string, MatchState>
 
 /** A scenario name. */

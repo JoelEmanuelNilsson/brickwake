@@ -1,5 +1,6 @@
 import { Clock, Context, Effect, Fiber, Layer, Random, Schema, Semaphore } from "effect"
 import {
+  serverEvent,
   ServerMessageJson,
   shipSnapshot,
   windSnapshot,
@@ -7,7 +8,7 @@ import {
   type ServerEvent,
   type ServerMessage,
 } from "../protocol/messages.ts"
-import { addShip, createMatch, removeShip, spawnPoint, stepMatch, type MatchState } from "../sim/match.ts"
+import { addShip, createMatch, removeShip, spawnPoint, stepMatch, type BroadsideOrder, type MatchState } from "../sim/match.ts"
 import { seas } from "../sim/ocean.ts"
 import { scenarios, scenarioShipId } from "../sim/scenarios.ts"
 import { shipId, type ShipControls, type ShipId } from "../sim/ship.ts"
@@ -25,6 +26,8 @@ export interface Seat {
   readonly shipId: ShipId
   /** Changes the ship's helm or sail from the next tick on. */
   readonly command: (change: Partial<ShipControls>) => Effect.Effect<void>
+  /** Orders a broadside on the next tick; the sim refuses it with a `broadsideRefused` event when it cannot fire. */
+  readonly fire: (order: BroadsideOrder) => Effect.Effect<void>
   /** Takes the ship out of the room. Idempotent. */
   readonly leave: Effect.Effect<void>
 }
@@ -45,6 +48,8 @@ interface Room {
   state: MatchState
   /** Controls to apply on the next tick, by ship. */
   commands: Map<ShipId, ShipControls>
+  /** Broadside orders for the next tick, by ship; a later order in the same tick replaces an earlier one. */
+  orders: Map<ShipId, BroadsideOrder>
   /** Events since the last snapshot, sent with it. */
   events: Array<ServerEvent>
   readonly members: Map<ShipId, Send>
@@ -64,9 +69,11 @@ const broadcast = (room: Room, message: ServerMessage) => {
 }
 
 const stepRoom = (room: Room) => {
-  room.state = stepMatch(room.state, room.commands).state
+  const step = stepMatch(room.state, room.commands, room.orders)
+  room.state = step.state
   room.commands = new Map()
-  const events = room.events
+  room.orders = new Map()
+  const events = [...room.events, ...step.events.map(serverEvent)]
   room.events = []
   return broadcast(room, {
     _tag: "snapshot",
@@ -119,6 +126,7 @@ export const make = Effect.gen(function* () {
         isPrivate,
         state,
         commands: new Map(),
+        orders: new Map(),
         events: [],
         members: new Map(),
         shipsJoined: 0,
@@ -141,6 +149,7 @@ export const make = Effect.gen(function* () {
       if (!room.members.delete(id)) return
       room.state = removeShip(room.state, id)
       room.commands.delete(id)
+      room.orders.delete(id)
       room.events.push({ _tag: "shipLeft", tick: room.state.tick, shipId: id })
       yield* Effect.logInfo(`${id} left room ${room.id}`)
       if (room.members.size === 0) {
@@ -157,6 +166,10 @@ export const make = Effect.gen(function* () {
         const ship = room.state.ships.find((candidate) => candidate.id === id)
         if (!ship || !room.members.has(id)) return
         room.commands.set(id, { ...(room.commands.get(id) ?? ship.controls), ...change })
+      }),
+    fire: (order) =>
+      Effect.sync(() => {
+        if (room.members.has(id)) room.orders.set(id, order)
       }),
     leave: leave(room, id),
   })

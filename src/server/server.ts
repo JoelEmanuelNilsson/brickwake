@@ -3,6 +3,7 @@ import { Effect, Layer, Schema } from "effect"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import type { Socket } from "effect/unstable/socket"
 import { ClientMessage, ClientMessageJson, ServerMessageJson } from "../protocol/messages.ts"
+import { vec3 } from "../sim/vector.ts"
 import { makeLink, noLag, type NetworkLag } from "./lag.ts"
 import * as Rooms from "./rooms.ts"
 
@@ -41,6 +42,7 @@ const connection = (socket: Socket.Socket, lag: NetworkLag) =>
             : reject("not in a room"),
         setHelm: ({ rudder }) => (seat ? seat.command({ rudder }) : reject("join a room first")),
         setSail: ({ level }) => (seat ? seat.command({ sail: level }) : reject("join a room first")),
+        fireBroadside: ({ side, aimPoint }) => (seat ? seat.fire({ side, aimPoint: vec3(...aimPoint) }) : reject("join a room first")),
       })
 
     const receive = yield* makeLink(lag, (frame: string | Uint8Array) =>
