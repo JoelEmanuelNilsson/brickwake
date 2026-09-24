@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test"
-import { stepMatch, type MatchState, type ShipInputs } from "./match.ts"
+import { addShip, createMatch, removeShip, spawnPoint, stepMatch, type MatchState, type ShipInputs } from "./match.ts"
+import { seas } from "./ocean.ts"
 import { scenarios, scenarioShipId } from "./scenarios.ts"
-import type { ShipControls } from "./ship.ts"
-import { SIM_HZ } from "./tuning.ts"
+import { shipId, type ShipControls } from "./ship.ts"
+import { SIM_HZ, tuning } from "./tuning.ts"
+import { makeWind } from "./wind.ts"
 
 const script: ReadonlyArray<readonly [tick: number, controls: ShipControls]> = [
   [0, { rudder: 0, sail: 2 }],
@@ -48,4 +50,16 @@ test("controls persist until the next input for that ship", () => {
   const state = replay(scenarios.calm, 11)
   expect(state.ships[0]?.controls).toEqual({ rudder: -1, sail: 1 })
   expect(state.tick).toBe(11 * SIM_HZ)
+})
+
+test("joining ships spawn far apart on a beam reach, and a removed ship is gone", () => {
+  let state = createMatch({ seed: 1, sea: seas.calm, wind: makeWind({ toward: 0.3, speed: 14, gustiness: 0 }), ships: [] })
+  const ids = Array.from({ length: tuning.match.maxShips }, (_, index) => shipId(`ship-${index + 1}`))
+  for (const id of ids) state = addShip(state, spawnPoint(state, id))
+  const gaps = state.ships.flatMap((a, i) => state.ships.slice(i + 1).map((b) => Math.hypot(a.position.x - b.position.x, a.position.z - b.position.z)))
+  expect(Math.min(...gaps)).toBeGreaterThan(100)
+  expect(spawnPoint(state, shipId("next")).heading).toBeCloseTo(0.3 + Math.PI / 2)
+  const removed = removeShip(state, ids[3]!)
+  expect(removed.ships.map((ship) => ship.id)).toEqual(ids.filter((id) => id !== ids[3]))
+  expect(removeShip(removed, ids[3]!)).toEqual(removed)
 })

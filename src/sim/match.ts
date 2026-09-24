@@ -1,7 +1,7 @@
 import type { SeaState } from "./ocean.ts"
 import { seedRng, type RngState } from "./rng.ts"
 import { makeShip, stepShip, type ShipControls, type ShipId, type ShipState } from "./ship.ts"
-import { SIM_DT } from "./tuning.ts"
+import { SIM_DT, tuning } from "./tuning.ts"
 import { stepWind, type Wind } from "./wind.ts"
 
 /** Everything that decides a match's outcome. Replays exactly from its seed and the inputs per tick. */
@@ -37,6 +37,30 @@ export const addShip = (state: MatchState, spawn: ShipSpawn): MatchState => ({
   ...state,
   ships: [...state.ships, makeShip(spawn, state.sea, matchTime(state))],
 })
+
+/** Takes a ship out of the match; unknown ids leave the state unchanged. */
+export const removeShip = (state: MatchState, id: ShipId): MatchState => ({
+  ...state,
+  ships: state.ships.filter((ship) => ship.id !== id),
+})
+
+/**
+ * Where a joining ship starts: the spawn-ring slot farthest from every ship already afloat, bow
+ * across the base wind so setting sail gives a beam reach at once.
+ */
+export const spawnPoint = (state: MatchState, id: ShipId): ShipSpawn => {
+  const { radius, slots } = tuning.match.spawnRing
+  const clearance = (slot: number) => {
+    const angle = (2 * Math.PI * slot) / slots
+    const x = radius * Math.cos(angle)
+    const z = radius * Math.sin(angle)
+    return state.ships.reduce((nearest, ship) => Math.min(nearest, Math.hypot(ship.position.x - x, ship.position.z - z)), Infinity)
+  }
+  let best = 0
+  for (let slot = 1; slot < slots; slot++) if (clearance(slot) > clearance(best)) best = slot
+  const angle = (2 * Math.PI * best) / slots
+  return { id, x: radius * Math.cos(angle), z: radius * Math.sin(angle), heading: state.wind.baseToward + Math.PI / 2 }
+}
 
 /** A match at tick 0. */
 export const createMatch = (options: {
