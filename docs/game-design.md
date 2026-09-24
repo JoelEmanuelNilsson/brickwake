@@ -25,7 +25,11 @@ the distance. `ref-04`/`ref-05` show the gun-deck view through a gunport.
 - Firing: one click fires the whole broadside on the facing side.
 - Damage: single hull HP, but the sim records which bricks each ship has lost, so
   holes and flooding can be added later without a redesign.
-- One ship class to start. More classes are new brick-generator settings.
+- One of each (Joel, 2026-09-24): one ship class, one cannon type, one ammunition
+  type, one map. Variety that costs little stays: sail and flag colours per player
+  or team (FFA colours; Pirates vs Navy in TDM) are textures on the same ship.
+  Anything else is built once and built well. More ship classes, cannon types and
+  ammunition are "Later", and a new class is new `ShipSpec` values, not new code.
 - Ships are candidate C (decided 2026-09-24 from the two research reports; see Brick
   ships): our own ~50 part shapes keyed by LDraw ID, generated from a TypeScript
   `ShipSpec`, rendered as `InstancedMesh` per part shape per ship.
