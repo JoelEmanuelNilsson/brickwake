@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { renderSoundBank } from "./sound-bank.ts"
-import { bandShare, envelopeFrames, peakLevel, spectralCentroid } from "./sound-analysis.ts"
+import { bandShare, decaySeconds, envelopeFrames, peakLevel, spectralCentroid } from "./sound-analysis.ts"
 import { whistlePeakSeconds } from "./sound-recipes.ts"
 
 const sampleRate = 48000
@@ -16,10 +16,11 @@ describe("sound bank", () => {
     }
   })
 
-  test("a near cannon boom is mostly low body with a crack above it; a distant one is darker", () => {
+  test("a near cannon boom is mostly low body with a crack on its attack and a long tail; a distant one is darker", () => {
     for (const boom of bank.oneShots.cannonBoom) {
-      expect(bandShare(boom, sampleRate, 0, 150)).toBeGreaterThan(0.6)
-      expect(spectralCentroid(boom, sampleRate)).toBeGreaterThan(250)
+      expect(bandShare(boom, sampleRate, 0, 150)).toBeGreaterThan(0.8)
+      expect(spectralCentroid(boom.slice(0, sampleRate / 10), sampleRate)).toBeGreaterThan(350)
+      expect(decaySeconds(boom, sampleRate)).toBeGreaterThan(3.5)
     }
     for (const boom of bank.oneShots.distantBoom) expect(spectralCentroid(boom, sampleRate)).toBeLessThan(300)
   })

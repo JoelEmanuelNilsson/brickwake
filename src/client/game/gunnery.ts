@@ -179,7 +179,7 @@ export class Gunnery {
     this.#sea = sea
     this.#time = renderTime
     this.#trailClock -= dt
-    this.balls.update(renderTime)
+    this.balls.update(renderTime, camera.camera.position)
     if (this.#trailClock <= 0) this.#trailClock = 1 / 30
     this.#reticle.visible = sailing && pose !== undefined
     if (pose === undefined) {
