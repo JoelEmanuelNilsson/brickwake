@@ -608,6 +608,55 @@ export class Effects {
     }
   }
 
+  /**
+   * Sea pouring into a foundering hull at the waterline point (x, y, z), flowing along the unit (dx, dz): sheets of white
+   * water tumbling over the rail or through a hole, and foam swept after them. `intensity` 0–1 scales it.
+   */
+  inrush(x: number, y: number, z: number, dx: number, dz: number, intensity: number): void {
+    const p = this.#p
+    for (let i = 0; i < 2; i++) {
+      const speed = random(1.5, 3.5)
+      this.#at(x + jitter(0.8), y + random(0, 0.4), z + jitter(0.8))
+      this.#look(dx * speed + jitter(0.5), random(0.4, 1.8), dz * speed + jitter(0.5), random(0.7, 1.2), random(2, 3.2), random(0.6, 1), 1.15, 1.2, 1.25, 0.65 * intensity)
+      p.gravity = 9.81
+      p.drag = 0.5
+      p.shape = ParticleShape.streak
+      this.spray.emit(p)
+    }
+    this.#at(x + jitter(1), y, z + jitter(1))
+    this.#look(dx * 1.5, 0, dz * 1.5, random(1.2, 2.2), random(3.5, 6), random(2, 3.5), 0.93, 0.96, 0.99, 0.75 * intensity)
+    p.drag = 0.7
+    p.shape = ParticleShape.flat
+    p.rotation = Math.random() * Math.PI * 2
+    p.spin = jitter(0.3)
+    this.foam.emit(p)
+  }
+
+  /**
+   * A battered ship smoulders from the hole at (x, y, z): a column of smoke, greyer when `intensity` (0–1) is low and
+   * black when high; `burning` adds flame licking out of it and the odd ember.
+   */
+  smoulder(x: number, y: number, z: number, intensity: number, burning: boolean): void {
+    const p = this.#p
+    const tone = 0.3 - 0.2 * intensity + random(-0.03, 0.03)
+    this.#at(x + jitter(0.4), y + random(0, 0.4), z + jitter(0.4))
+    this.#look(jitter(0.4), random(1.5, 3), jitter(0.4), random(0.8, 1.4), random(6, 10), random(5, 8), tone, tone * 0.96, tone * 0.92, 0.35 + 0.45 * intensity)
+    this.#drift(0.7, 0.6, -0.8)
+    this.smoke.emit(p)
+    if (!burning) return
+    this.#at(x + jitter(0.3), y + random(0, 0.3), z + jitter(0.3))
+    this.#look(jitter(0.4), random(1, 2.2), jitter(0.4), random(0.6, 1.1), random(1.3, 2.2), random(0.25, 0.45), 4.5, 2, 0.6, 0.85)
+    p.rotation = Math.random() * Math.PI * 2
+    this.fire.emit(p)
+    if (Math.random() < 0.3) {
+      this.#at(x, y + 0.3, z)
+      this.#look(jitter(1.5), random(2, 5), jitter(1.5), 0.08, 0.03, random(0.6, 1.2), 8, 3.6, 1, 1)
+      p.gravity = 4
+      p.shape = ParticleShape.streak
+      this.sparks.emit(p)
+    }
+  }
+
   /** A faint wisp behind a ball in flight, so the arc reads at range. */
   trail(x: number, y: number, z: number): void {
     this.#at(x, y, z)

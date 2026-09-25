@@ -4,6 +4,7 @@ import { HttpServer } from "effect/unstable/http"
 import { chromium, type Browser, type Page } from "playwright"
 import type { BrickwakeDebug } from "../src/client/game/debug-hook.ts"
 import * as Server from "../src/server/server.ts"
+import { tuning } from "../src/sim/tuning.ts"
 
 
 const degrees = 180 / Math.PI
@@ -161,7 +162,11 @@ const gunnery = async (browser: Browser, url: string) => {
     await page.waitForTimeout(wait)
   }
   check(burst.particles.fire > 0 && burst.particles.smoke > 20 && burst.shake > 0, `flash, smoke and shake play on firing (${JSON.stringify(burst)})`)
-  check(await waitFor(page, (h) => (h.ships().find((s) => s.id === "dummy")?.hp ?? 100) < 100, 6000), "a hit lowers the dummy's HP")
+  const lowered = await page.waitForFunction((full) => (window.brickwake?.ships().find((s) => s.id === "dummy")?.hp ?? full) < full, dummy.hp, { timeout: 6000 }).then(
+    () => true,
+    () => false,
+  )
+  check(lowered, "a hit lowers the dummy's HP")
   // Looking past the bow keeps the own hull out of the way of the dummy.
   await page.evaluate((yaw) => window.brickwake?.orbit(yaw, 0.1, 30), bearing(own.position, dummy.position) + 0.45)
   await waitFor(page, (h) => h.effects().particles.chips > 0, 1000)
@@ -320,7 +325,7 @@ const match = async (browser: Browser, url: string) => {
     // B looks away from A so the hit-direction arc has to point behind the view.
     await b.evaluate((yaw) => window.brickwake?.orbit(yaw, 0.15), bearing(target.position, ownA.position) + 2.2)
     const hpBefore = (await ownShip(b)).hp
-    const hit = await b.waitForFunction((before) => (window.brickwake?.ownShip()?.hp ?? 100) < before, hpBefore, { timeout: 4000 }).then(
+    const hit = await b.waitForFunction((before) => (window.brickwake?.ownShip()?.hp ?? before) < before, hpBefore, { timeout: 4000 }).then(
       () => true,
       () => false,
     )
@@ -337,31 +342,33 @@ const match = async (browser: Browser, url: string) => {
   const sunkEvent = await hook(a, (h) => h.events().find((e) => e._tag === "shipSunk"))
   check(sunkEvent?._tag === "shipSunk" && sunkEvent.shipId === "duel-b" && sunkEvent.by === "duel-a", `the sink is B's, by A (${JSON.stringify(sunkEvent)})`)
 
+  const aView = await matchOf(a)
+  check(aView.hud.feed.some((line) => line.includes("☠")), `A's kill feed shows the sink (${JSON.stringify(aView.hud.feed)})`)
+  check((await ownShip(a)).kills === 1 && aView.hud.standing.startsWith("1 sink"), `A scores the sink ("${aView.hud.standing}")`)
+  await a.screenshot({ path: ".shots/c3-kill-feed.png" })
+
   // B's captain watches from off the beam as the chase camera holds at the surface; A sees it go from 150 m.
   const wreck = await ownShip(b)
   await b.evaluate((yaw) => window.brickwake?.orbit(yaw, 0.1, 42), wreck.heading + Math.PI / 2 + 0.25)
   await a.evaluate((yaw) => window.brickwake?.orbit(yaw, 0.05, 30), bearing(ownA.position, wreck.position) + 0.3)
   const pitches: Array<number> = []
-  for (const [i, wait] of [300, 900, 900, 900].entries()) {
+  // Settling and listing for the first half of the sinking, then the plunge: frames across all of it.
+  for (const [i, wait] of [1500, 2500, 2500, 2000, 1500].entries()) {
     await b.waitForTimeout(wait)
     const ship = await shipOrNull(b, "duel-b")
     if (ship !== null) pitches.push(ship.pitch)
     await b.screenshot({ path: `.shots/c3-sinking-${i + 1}.png` })
-    if (i === 2) await a.screenshot({ path: ".shots/c3-sinking-far.png" })
+    if (i === 3) await a.screenshot({ path: ".shots/c3-sinking-far.png" })
   }
   const settle = Math.max(...pitches.map(Math.abs)) * degrees
   check(settle > 12, `B settles by the bow or stern as it sinks (${settle.toFixed(1)}°)`)
   const bView = await matchOf(b)
   await b.screenshot({ path: ".shots/c3-sunk-b.png" })
   check(bView.hud.banner.includes("Back on the water in"), `B sees its respawn countdown ("${bView.hud.banner}")`)
-  const aView = await matchOf(a)
-  check(aView.hud.feed.some((line) => line.includes("☠")), `A's kill feed shows the sink (${JSON.stringify(aView.hud.feed)})`)
-  check((await ownShip(a)).kills === 1 && aView.hud.standing.startsWith("1 sink"), `A scores the sink ("${aView.hud.standing}")`)
-  await a.screenshot({ path: ".shots/c3-kill-feed.png" })
 
   check(await waitFor(b, (h) => h.ownShip()?.life === "afloat" && (h.ownShip()?.spawn ?? 0) >= 2, 12_000), "B respawns")
   const reborn = await ownShip(b)
-  check(reborn.hp === 100 && Math.abs(Math.hypot(reborn.position[0], reborn.position[2]) - 260) < 5, `B is back at full HP on the spawn ring (${reborn.hp} HP)`)
+  check(reborn.hp === tuning.damage.hullHp && Math.abs(Math.hypot(reborn.position[0], reborn.position[2]) - 260) < 5, `B is back at full HP on the spawn ring (${reborn.hp} HP)`)
   await b.screenshot({ path: ".shots/c3-respawn-b.png" })
 
   await a.keyboard.down("Tab")
@@ -406,7 +413,7 @@ const match = async (browser: Browser, url: string) => {
     `A sank B with ${volleys} broadside(s); B settled ${settle.toFixed(1)}° by the ${sunkEvent?._tag === "shipSunk" ? "struck end" : "?"}`,
     `results: A ${endA.hud.scoreboard?.verdict}, B ${endB.hud.scoreboard?.verdict}; restart A spawn ${restartA.spawn}`,
     `frames (duel): cpu ${frames.cpuMs.toFixed(2)} ms, gpu ${frames.gpuMs.toFixed(2)} ms, interval ${frames.intervalMs.toFixed(2)} ms`,
-    "saved .shots/c3-{hud,hit-direction,sinking-1..4,sinking-far,sunk-b,kill-feed,respawn-b,scoreboard,results-a,results-b,restart,warmup}.png",
+    "saved .shots/c3-{hud,hit-direction,sinking-1..5,sinking-far,sunk-b,kill-feed,respawn-b,scoreboard,results-a,results-b,restart,warmup}.png",
   ].join("\n")
 }
 
@@ -763,7 +770,7 @@ const effects = async (browser: Browser, url: string) => {
   const sinking = await waitFor(page, (h) => h.ownShip()?.life === "sinking", 90_000)
   if (sinking) {
     await page.evaluate((heading) => window.brickwake?.orbit(heading - Math.PI / 2 - 0.6, 0.1, 42), (await ownShip(page)).heading)
-    for (const [i, wait] of [600, 900, 900, 900, 1000, 1500, 2000].entries()) {
+    for (const [i, wait] of [1000, 2000, 2000, 2000, 2000, 1500, 1500].entries()) {
       await page.waitForTimeout(wait)
       await page.screenshot({ path: `.shots/fx-sinking-${i + 1}.png` })
     }

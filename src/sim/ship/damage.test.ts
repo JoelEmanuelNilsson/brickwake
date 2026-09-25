@@ -98,16 +98,16 @@ const volley = (damage: ShipDamage, seed: number, from: number, to: number) => {
   return hits
 }
 
-test("about twenty balls sink the galleon; every hit stays bounded and 20 % HP has lost hundreds of parts", () => {
+test("about fifty balls sink the galleon; every hit stays bounded and 20 % HP has lost hundreds of parts", () => {
   for (const seed of [1, 2, 3, 4, 5]) {
     const damage = new ShipDamage(graph)
-    const toTwenty = volley(damage, seed, 100, 20)
+    const toTwenty = volley(damage, seed, tuning.damage.hullHp, tuning.damage.hullHp * 0.2)
     const lost = toTwenty.reduce((n, h) => n + h.removed.length + h.detached.length, 0)
-    const rest = volley(damage, seed + 100, 20, 0)
+    const rest = volley(damage, seed + 100, tuning.damage.hullHp * 0.2, 0)
     const hits = [...toTwenty, ...rest]
-    expect(hits.length).toBeGreaterThanOrEqual(20)
-    expect(hits.length).toBeLessThanOrEqual(30)
-    expect(lost).toBeGreaterThan(150)
+    expect(hits.length).toBeGreaterThanOrEqual(40)
+    expect(hits.length).toBeLessThanOrEqual(60)
+    expect(lost).toBeGreaterThan(250)
     expect(lost).toBeLessThan(ship.parts.length / 8)
     for (const hit of hits) {
       expect(hit.removed.length).toBeLessThanOrEqual(tuning.damage.bricks.hullCap)

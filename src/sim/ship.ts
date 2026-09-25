@@ -43,12 +43,12 @@ export interface ShipControls {
 }
 
 /**
- * Where a ship is in its life. `sinking`: buoyancy fades from the `floodEnd` (+1 bow, −1 stern) aft or forward, the
- * ship takes no orders and cannot be hit. `sunk`: under water, out of play until `respawnAt` (sim seconds).
+ * Where a ship is in its life. `sinking`: the hull settles and lists toward `floodSide` (+1 starboard, −1 port), then
+ * buoyancy fades from the `floodEnd` (+1 bow, −1 stern) aft or forward; the ship takes no orders and cannot be hit. `sunk`: under water, out of play until `respawnAt` (sim seconds).
  */
 export type ShipLife =
   | { readonly _tag: "afloat" }
-  | { readonly _tag: "sinking"; readonly since: number; readonly floodEnd: 1 | -1 }
+  | { readonly _tag: "sinking"; readonly since: number; readonly floodEnd: 1 | -1; readonly floodSide: 1 | -1 }
   | { readonly _tag: "sunk"; readonly respawnAt: number }
 
 const afloat: ShipLife = { _tag: "afloat" }
@@ -154,14 +154,23 @@ export const makeShip = (
   lastHitBy: undefined,
 })
 
-/** Share of a buoyancy column at ship-local `x` still afloat at `time`: the flooding end loses it first, the far end last. */
-export const buoyancyKept = (life: ShipLife, x: number, time: number): number => {
+/**
+ * Share of a buoyancy column at ship-local (`x`, `z`) still afloat at `time`: the hull first settles, listing to the
+ * flood side and trimming by the flooding end; then the flooding end loses the rest first and the far end last, so it
+ * rises before the plunge.
+ */
+export const buoyancyKept = (life: ShipLife, x: number, z: number, time: number): number => {
   if (life._tag === "afloat") return 1
   if (life._tag === "sunk") return 0
-  const { floodSeconds, floodSpread } = tuning.sinking
+  const { settleSeconds, settleLoss, plungeAt, floodSeconds, floodSpread } = tuning.sinking
+  const clamp = (v: number) => Math.max(0, Math.min(1, v))
+  const t = time - life.since
   const toward = Math.max(-1, Math.min(1, (x * life.floodEnd) / (tuning.hull.hitBox.length / 2)))
-  const flooded = (time - life.since - ((1 - toward) / 2) * floodSpread) / floodSeconds
-  return 1 - Math.max(0, Math.min(1, flooded))
+  const low = clamp((1 + (z * life.floodSide) / (tuning.hull.hitBox.beam / 2)) / 2)
+  const s = clamp(t / settleSeconds)
+  const settled = s * (2 - s) * (settleLoss.all + settleLoss.lowSide * low + settleLoss.floodEnd * ((1 + toward) / 2))
+  const flooded = clamp((t - plungeAt - ((1 - toward) / 2) * floodSpread) / floodSeconds)
+  return (1 - settled) * (1 - flooded)
 }
 
 /** Applies an instantaneous world impulse (N·s) at a ship-local point, with the same added mass the body integrates with. */
@@ -259,7 +268,7 @@ const bodyStep = (ship: ShipState, env: ShipEnvironment, hull: Hull, time: numbe
       const center = toWorld(vec3(column.bottom.x, column.bottom.y + submerged / 2, column.bottom.z))
       const relativeRise = velocityAt(center).y - water.velocity.y
       // Damping fades in over the first half metre so a column touching the surface cannot chatter.
-      const kept = buoyancyKept(ship.life, column.bottom.x, time)
+      const kept = buoyancyKept(ship.life, column.bottom.x, column.bottom.z, time)
       const wet = Math.min(1, submerged / 0.5) * kept
       const lift = waterDensity * gravity * submerged * kept * (1 - (flooded?.[c] ?? 0))
       applyAt(center, vec3(0, column.area * (lift - dampingPerArea * relativeRise * wet), 0))
@@ -275,7 +284,7 @@ const bodyStep = (ship: ShipState, env: ShipEnvironment, hull: Hull, time: numbe
     radiated += heaveDamping * rise * rise
   }
 
-  for (const column of hull.columns) keptArea += column.area * buoyancyKept(ship.life, column.bottom.x, time)
+  for (const column of hull.columns) keptArea += column.area * buoyancyKept(ship.life, column.bottom.x, column.bottom.z, time)
 
   const water = add(sampleOcean(env.sea, ship.position.x, ship.position.z, time).velocity, arenaCurrent(com))
   const surfaceShare = keptArea / hull.waterplaneArea

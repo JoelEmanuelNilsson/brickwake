@@ -80,7 +80,7 @@ test("allies' balls strike each other's hulls and sails for no damage and break 
 })
 
 test("TDM win: a headless Pirates-vs-Navy bot match ends with the side that first reached the score limit, bots never aiming at allies", () => {
-  let state = tdmMatch(6, 12)
+  let state = tdmMatch(6, 5)
   const events: Array<MatchEvent> = []
   let allyTargets = 0
   const started = Bun.nanoseconds()
@@ -101,7 +101,7 @@ test("TDM win: a headless Pirates-vs-Navy bot match ends with the side that firs
   expect(state.phase._tag).toBe("ended")
   if (state.phase._tag !== "ended") return
   const { pirates, navy } = state.teamSinks
-  expect(Math.max(pirates, navy)).toBe(12)
+  expect(Math.max(pirates, navy)).toBe(5)
   expect(state.phase.winner).toEqual({ _tag: "team", team: pirates > navy ? "pirates" : "navy" })
   const credited = events.filter((event) => event._tag === "shipSunk" && event.by !== undefined)
   expect(credited).toHaveLength(pirates + navy)
