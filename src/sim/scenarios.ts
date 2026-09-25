@@ -24,6 +24,7 @@ const duelBHp = 15
 
 const duel = createMatch({
   seed: 6,
+  weather: "clear",
   rules: { ...ffaRules, warmupSeconds: 0, timeLimit: 30, endedSeconds: 6 },
   sea: seas.calm,
   wind: makeWind({ toward: -quarter, speed: 14, gustiness: 0 }),
@@ -36,6 +37,7 @@ const duel = createMatch({
 const skirmish = balanceBots(
   createMatch({
     seed: 8,
+    weather: "clear",
     rules: { ...tdmRules, warmupSeconds: 0, scoreLimit: 1, timeLimit: 120, endedSeconds: 30 },
     sea: seas.calm,
     wind: makeWind({ toward: -quarter, speed: 14, gustiness: 0 }),
@@ -55,7 +57,7 @@ const lineOfBattle = (() => {
     heading: 0,
     controls: { rudder: 0, sail: 1 },
   }))
-  const state = createMatch({ seed: 8, sea: seas.open, wind: makeWind({ toward: -quarter, speed: 14, gustiness: 1 }), ships, rules: practice })
+  const state = createMatch({ seed: 8, weather: "clear", sea: seas.open, wind: makeWind({ toward: -quarter, speed: 14, gustiness: 1 }), ships, rules: practice })
   let rng = state.rng
   const bots: Array<Bot> = ships.slice(1).map(({ id }) => {
     const drawn = drawBotSkill(rng)
@@ -67,20 +69,21 @@ const lineOfBattle = (() => {
 
 /**
  * Named start states, usable from tests and as `?scenario=<name>` in the browser. The ship heads +x,
- * sails furled, with the wind from port (blowing toward +z): a beam reach once sail is set.
+ * sails furled, with the wind from port (blowing toward +z): a beam reach once sail is set. All are clear weather.
  */
 export const scenarios = {
   /** Flat water. */
-  calm: createMatch({ seed: 1, sea: seas.calm, wind: makeWind({ toward: -quarter, speed: 14, gustiness: 0 }), ships: solo, rules: practice }),
+  calm: createMatch({ seed: 1, weather: "clear", sea: seas.calm, wind: makeWind({ toward: -quarter, speed: 14, gustiness: 0 }), ships: solo, rules: practice }),
   /** Swell rolling in from port, across the ship. */
-  "beam-sea": createMatch({ seed: 2, sea: swell(-quarter), wind: makeWind({ toward: -quarter, speed: 14, gustiness: 0 }), ships: solo, rules: practice }),
+  "beam-sea": createMatch({ seed: 2, weather: "clear", sea: swell(-quarter), wind: makeWind({ toward: -quarter, speed: 14, gustiness: 0 }), ships: solo, rules: practice }),
   /** Swell running straight at the bow. */
-  "head-sea": createMatch({ seed: 3, sea: swell(Math.PI), wind: makeWind({ toward: -quarter, speed: 14, gustiness: 0 }), ships: solo, rules: practice }),
+  "head-sea": createMatch({ seed: 3, weather: "clear", sea: swell(Math.PI), wind: makeWind({ toward: -quarter, speed: 14, gustiness: 0 }), ships: solo, rules: practice }),
   /** The match sea and a gusty wind. */
-  "open-sea": createMatch({ seed: 4, sea: seas.open, wind: makeWind({ toward: -quarter, speed: 14, gustiness: 1 }), ships: solo, rules: practice }),
+  "open-sea": createMatch({ seed: 4, weather: "clear", sea: seas.open, wind: makeWind({ toward: -quarter, speed: 14, gustiness: 1 }), ships: solo, rules: practice }),
   /** Flat water with an unmanned ship 150 m off the starboard beam, close-hauled under half sail: it drifts at ~1.4 m/s. */
   "target-dummy": createMatch({
     seed: 5,
+    weather: "clear",
     sea: seas.calm,
     wind: makeWind({ toward: -quarter, speed: 14, gustiness: 0 }),
     ships: [...solo, { id: dummyShipId, x: 0, z: 150, heading: quarter / 2, controls: { rudder: 0, sail: 1 } }],
@@ -91,7 +94,7 @@ export const scenarios = {
    * results and no warmup. Two clients joining with the same `room` share it.
    */
   /** A full room: the player at the arena centre and bots on the spawn ring filling it to the most ships a room holds. */
-  armada: balanceBots(createMatch({ seed: 7, sea: seas.open, wind: makeWind({ toward: -quarter, speed: 14, gustiness: 1 }), ships: solo, rules: practice }), tuning.match.maxShips),
+  armada: balanceBots(createMatch({ seed: 7, weather: "clear", sea: seas.open, wind: makeWind({ toward: -quarter, speed: 14, gustiness: 1 }), ships: solo, rules: practice }), tuning.match.maxShips),
   /** Twelve ships in two lines trading broadsides at once: the effects' and debris' frame budget. */
   "line-of-battle": lineOfBattle,
   duel: { ...duel, ships: duel.ships.map((ship) => (ship.id === duelShipIds[1] ? { ...ship, hp: duelBHp } : ship)) },

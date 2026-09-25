@@ -5,6 +5,7 @@ import { chromium, type Browser, type Page } from "playwright"
 import type { BrickwakeDebug } from "../src/client/game/debug-hook.ts"
 import * as Server from "../src/server/server.ts"
 import { tuning } from "../src/sim/tuning.ts"
+import { weatherNames } from "../src/sim/weather.ts"
 
 
 const degrees = 180 / Math.PI
@@ -484,6 +485,30 @@ const bots = async (browser: Browser, url: string) => {
  * Plays C5 at Joel's display size (DPR capped to 1.5): the galleon in a full 12-ship bot match under the sunset sky,
  * screenshots for ref-01, and frame times measured back to back while the bots close in and fight.
  */
+/** Each weather over the armada, from c5's ref-01 camera. */
+const weather = async (browser: Browser, url: string) => {
+  const lines: Array<string> = []
+  for (const name of weatherNames) {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } })
+    await page.goto(`${url}?scenario=armada&orbit=140&weather=${name}`)
+    await page.waitForFunction(() => window.brickwake?.joined === true && window.brickwake.ships().length >= 12, undefined, { timeout: 20_000 })
+    await page.mouse.click(640, 360)
+    await page.keyboard.press("KeyW")
+    await page.keyboard.press("KeyW")
+    await page.waitForTimeout(5000)
+    const shown = (await hook(page, (h) => h.match()))?.weather
+    check(shown === name, `the armada opens in ${name} weather (shows ${shown})`)
+    const heading = (await ownShip(page)).heading
+    await page.evaluate((heading) => window.brickwake?.orbit(heading + 0.3, 0.07, 30), heading)
+    await page.waitForTimeout(1500)
+    await page.screenshot({ path: `.shots/weather-${name}.png` })
+    const hud = await page.locator('[data-hud="wind"]').textContent()
+    lines.push(`${name}: hud "${hud}"`)
+    await page.close()
+  }
+  return [...lines, `saved .shots/weather-{${weatherNames.join(",")}}.png`].join("\n")
+}
+
 const scene = async (browser: Browser, url: string) => {
   const page = await browser.newPage({ viewport: { width: 1728, height: 1117 }, deviceScaleFactor: 2 })
   await page.goto(`${url}?scenario=armada&orbit=140`)
@@ -922,7 +947,7 @@ Effect.gen(function* () {
     Effect.promise(() => chromium.launch({ args: ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist"] })),
     (browser) => Effect.promise(() => browser.close()),
   )
-  const checks = { c1: sail, c2: gunnery, c3: match, c4: bots, c5: scene, c6: wreck, c7: aimView, c8: tdm, c9: ux, fx: effects }
+  const checks = { c1: sail, c2: gunnery, c3: match, c4: bots, c5: scene, c6: wreck, c7: aimView, c8: tdm, c9: ux, fx: effects, weather }
   const wanted = process.argv.slice(2)
   for (const [name, run] of Object.entries(checks)) {
     if (wanted.length > 0 && !wanted.includes(name)) continue

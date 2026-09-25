@@ -50,6 +50,8 @@ export interface HudReading {
   windSpeed: number
   /** Yaw the camera looks along; the compass turns so this is up. */
   viewYaw: number
+  /** Name of the match weather. */
+  weather: string
 }
 
 const pointOfSail = (angleOffWind: number) =>
@@ -71,7 +73,7 @@ const find = (root: HTMLElement, name: string) => {
 
 const wrap = (angle: number) => Math.atan2(Math.sin(angle), Math.cos(angle))
 
-/** The sailing HUD: sail level, rudder, speed, wind and point of sail. Writes the DOM only when a shown value changes. */
+/** The sailing HUD: sail level, rudder, speed, weather, wind and point of sail. Writes the DOM only when a shown value changes. */
 export class Hud {
   readonly #speed: HTMLElement
   readonly #sailSet: HTMLElement
@@ -81,7 +83,7 @@ export class Hud {
   readonly #windArrow: HTMLElement
   readonly #point: HTMLElement
   readonly #wind: HTMLElement
-  #shown = { speed: Number.NaN, level: -1, set: Number.NaN, rudder: Number.NaN, ship: Number.NaN, wind: Number.NaN, point: "", windSpeed: Number.NaN }
+  #shown = { speed: Number.NaN, level: -1, set: Number.NaN, rudder: Number.NaN, ship: Number.NaN, wind: Number.NaN, point: "", windSpeed: Number.NaN, weather: "" }
 
   constructor(root: HTMLElement) {
     root.innerHTML = markup
@@ -122,7 +124,8 @@ export class Hud {
     if (point !== shown.point) this.#point.textContent = point
     shown.point = point
     const windSpeed = Math.round(reading.windSpeed * knotsPerMetrePerSecond)
-    if (windSpeed !== shown.windSpeed) this.#wind.textContent = `Wind ${windSpeed} kn`
+    if (windSpeed !== shown.windSpeed || reading.weather !== shown.weather) this.#wind.textContent = `${reading.weather} · wind ${windSpeed} kn`
     shown.windSpeed = windSpeed
+    shown.weather = reading.weather
   }
 }

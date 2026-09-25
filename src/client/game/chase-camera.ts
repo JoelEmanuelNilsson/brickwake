@@ -51,7 +51,8 @@ export class ChaseCamera {
   readonly #target = new Vector3()
   #trauma = 0
   #clock = 0
-  readonly #minHeight: number
+  /** Lowest the camera goes: above the highest crest the joined sea can raise. */
+  minHeight: number
   #following = false
   #heading = 0
   readonly #aimQ = new Quaternion()
@@ -60,10 +61,9 @@ export class ChaseCamera {
   readonly #shakeQ = new Quaternion()
   readonly #shakeEuler = new Euler()
 
-  /** `minHeight` keeps the camera above the highest crest the sea can raise. */
   constructor(minHeight: number) {
     this.camera = new PerspectiveCamera(chaseFov, 1, chaseNear, 6000)
-    this.#minHeight = minHeight
+    this.minHeight = minHeight
   }
 
   /** Horizontal distance from the ship to the aim, metres. */
@@ -133,7 +133,7 @@ export class ChaseCamera {
     const flat = Math.cos(this.pitch) * this.distance
     this.camera.position.set(
       this.#focus.x + Math.cos(this.yaw) * flat,
-      Math.max(this.#minHeight, this.#focus.y + Math.sin(this.pitch) * this.distance),
+      Math.max(this.minHeight, this.#focus.y + Math.sin(this.pitch) * this.distance),
       this.#focus.z - Math.sin(this.yaw) * flat,
     )
     this.camera.up.set(0, 1, 0)

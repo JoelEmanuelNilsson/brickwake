@@ -1,10 +1,11 @@
-import { ACESFilmicToneMapping, Color, DirectionalLight, FogExp2, HemisphereLight, LinearSRGBColorSpace, PCFShadowMap, PerspectiveCamera, Quaternion, Scene, Vector2, Vector3, WebGLRenderer } from "three"
+import { ACESFilmicToneMapping, Color, DirectionalLight, FogExp2, HemisphereLight, PCFShadowMap, PerspectiveCamera, Quaternion, Scene, Vector2, Vector3, WebGLRenderer } from "three"
 import type { ScenarioName } from "../../sim/scenarios.ts"
 import type { ClientMessage, MatchPhaseSnapshot, ServerEvent, ServerMessage, WindSnapshot } from "../../protocol/messages.ts"
 import { ballVelocityAt, segmentBoxEntry } from "../../sim/gunnery.ts"
 import { galleonClass, shipWreck } from "../../sim/wreck.ts"
 import { ffaRules, type MatchMode } from "../../sim/rules.ts"
 import { tuning } from "../../sim/tuning.ts"
+import type { WeatherName } from "../../sim/weather.ts"
 import { GameAudio } from "../audio/game-audio.ts"
 import { BrickDebris } from "./brick-debris.ts"
 import { ChaseCamera } from "./chase-camera.ts"
@@ -28,6 +29,8 @@ import { ShipView } from "./ship-view.ts"
 import { Wrecks } from "./wrecks.ts"
 import { SinkingShips } from "./sinking.ts"
 import { createGameSky, type GameSky } from "./sky.ts"
+import { Rain } from "./rain.ts"
+import { weatherLooks } from "./weather-look.ts"
 import { EventQueue, type ShipPose, SnapshotTimeline } from "./timeline.ts"
 import { shipLivery } from "./names.ts"
 import { WakeField, wakePeriod } from "./wake.ts"
@@ -74,12 +77,10 @@ interface ShipEntry {
   livery: { readonly team: ShipPose["team"]; readonly name: string } | undefined
 }
 
-/** A low sunset sun, 5° up, and the colour its light reaches the sea with (linear HDR). */
+/** A low sunset sun, 5° up. */
 const sunDirection = new Vector3().setFromSphericalCoords(1, (85 * Math.PI) / 180, 1.25)
-const sunColor = new Color().setRGB(1.8, 0.75, 0.25, LinearSRGBColorSpace)
 /** Muzzle-flash light colour, as the pooled PointLights in `Effects`. */
 const flashColor = new Color(0xff9a4a)
-const fogDensity = 0.0011
 /** Half the side of the square the sun's shadow map covers around the camera's ship, metres: this ship and its close neighbours. */
 const shadowHalfWidth = 45
 /** How far up-sun the shadow camera stands, metres; the low sun's shadow box runs twice this deep. */
@@ -98,10 +99,15 @@ export class Game {
   readonly hooks: Array<FrameHook> = []
   readonly eventHandlers: Array<EventHandler> = []
   readonly #pipeline: RenderPipeline
-  readonly #sun = new DirectionalLight(0xffb27a, 3.2)
+  readonly #sun = new DirectionalLight()
   /** A warm light from over the camera's shoulder, as ref-01 lights the faces it shows: hulls read in colour even against the sun. */
-  readonly #fill = new DirectionalLight(0xffc896, 1.4)
+  readonly #fill = new DirectionalLight()
+  readonly #hemisphere = new HemisphereLight()
+  readonly #fog = new FogExp2(0)
+  readonly #rain = new Rain()
   readonly #sky: GameSky
+  /** The weather the sky was last captured in. */
+  #weather: WeatherName = "clear"
   readonly #wake = new WakeField()
   readonly #galleon: GalleonModel
   readonly #wrecks: Wrecks
@@ -177,7 +183,7 @@ export class Game {
   #frameCount = 0
   #lastFrameMs = Number.NaN
   readonly #hintReading: HintReading = { sailing: false, paused: false, sailLevel: 0, rudder: 0, canFire: false, aim: false }
-  readonly #reading: HudReading = { speed: 0, sailLevel: 0, sailSet: 0, rudderAngle: 0, heading: 0, windToward: 0, windSpeed: 0, viewYaw: 0 }
+  readonly #reading: HudReading = { speed: 0, sailLevel: 0, sailSet: 0, rudderAngle: 0, heading: 0, windToward: 0, windSpeed: 0, viewYaw: 0, weather: "" }
 
   readonly canvas: HTMLCanvasElement
   readonly #orbit: number
@@ -191,6 +197,8 @@ export class Game {
     options: {
       readonly scenario: ScenarioName | undefined
       readonly room: string | undefined
+      /** With `scenario`: the weather its room opens in. */
+      readonly weather: WeatherName | undefined
       /** Quick-play mode to join at load; the title screen can switch it. Scenario rooms bring their own rules. */
       readonly mode: MatchMode
       readonly orbit: number
@@ -232,12 +240,10 @@ export class Game {
     }
     this.#hitIndicator = new HitIndicator(elements.hits)
 
-    this.#sky = createGameSky(this.renderer, sunDirection)
-    this.scene.fog = new FogExp2(0, fogDensity)
-    this.scene.fog.color.copy(this.#sky.horizon)
-    this.scene.add(this.#sky.dome)
-    this.scene.environment = this.#sky.environment
-    this.scene.environmentIntensity = 0.4
+    this.#sky = createGameSky(this.renderer, sunDirection, weatherLooks.clear.sky)
+    this.scene.fog = this.#fog
+    this.scene.add(this.#sky.dome, this.#rain.mesh)
+    this.#dress("clear")
     const sun = this.#sun
     sun.position.copy(sunDirection).multiplyScalar(shadowReach)
     this.renderer.shadowMap.enabled = graphics.shadows
@@ -253,7 +259,7 @@ export class Game {
     box.far = shadowReach * 2
     sun.shadow.bias = -0.0003
     sun.shadow.normalBias = 0.03
-    this.scene.add(sun, sun.target, new HemisphereLight(0xffc49a, 0x0b2a30, 1.1), this.#fill)
+    this.scene.add(sun, sun.target, this.#hemisphere, this.#fill)
     this.effects = new Effects(this.scene, sunDirection)
     this.#galleon = loadGalleon()
     this.#wrecks = new Wrecks(this.#galleon.graph)
@@ -328,9 +334,13 @@ export class Game {
         const join: ClientMessage =
           options.scenario === undefined
             ? { _tag: "join", mode: this.#mode }
-            : options.room === undefined
-              ? { _tag: "join", mode: this.#mode, scenario: options.scenario }
-              : { _tag: "join", mode: this.#mode, scenario: options.scenario, room: options.room }
+            : {
+                _tag: "join",
+                mode: this.#mode,
+                scenario: options.scenario,
+                ...(options.room === undefined ? {} : { room: options.room }),
+                ...(options.weather === undefined ? {} : { weather: options.weather }),
+              }
         this.#connection.send(join)
       },
       onMessage: (message, arrival) => this.#receive(message, arrival),
@@ -361,6 +371,7 @@ export class Game {
       debris: () => this.#debris,
       audio: () => this.audio,
       match: () => this.#matchReading,
+      weather: () => this.#weather,
       matchHud: () => this.#matchHud,
       measure: (frames) => this.#measure(frames),
       ui: () => ({
@@ -457,6 +468,26 @@ export class Game {
     this.canvas.requestPointerLock()?.catch(() => undefined)
   }
 
+  /** Dresses the scene for `weather`: sky, lights, fog and rain. The sea takes its part when it is built. */
+  #dress(weather: WeatherName) {
+    const look = weatherLooks[weather]
+    if (weather !== this.#weather) this.#sky.restyle(look.sky)
+    this.#weather = weather
+    this.scene.environment = this.#sky.environment
+    this.scene.environmentIntensity = look.environment
+    this.#fog.density = look.fogDensity
+    this.#fog.color.copy(this.#sky.horizon)
+    this.#sun.color.setRGB(...look.sun.color)
+    this.#sun.intensity = look.sun.intensity
+    this.#fill.color.setRGB(...look.fill.color)
+    this.#fill.intensity = look.fill.intensity
+    this.#hemisphere.color.setRGB(...look.hemisphere.sky)
+    this.#hemisphere.groundColor.setRGB(...look.hemisphere.ground)
+    this.#hemisphere.intensity = look.hemisphere.intensity
+    this.#rain.amount = look.rain
+    this.#reading.weather = look.label
+  }
+
   #receive(message: ServerMessage, arrival: number) {
     switch (message._tag) {
       case "welcome": {
@@ -471,10 +502,17 @@ export class Game {
         this.#gunnery.joined()
         this.#wrecks.load(message.wrecks)
         if (this.#ocean !== undefined) this.scene.remove(this.#ocean.mesh)
-        this.#ocean = new OceanSurface(message.sea, { sky: this.#sky.cube, sun: sunColor, sunDirection, flashColor }, wakePeriod)
+        this.#dress(message.weather)
+        const sea = weatherLooks[message.weather].sea
+        this.#ocean = new OceanSurface(
+          message.sea,
+          { sky: this.#sky.cube, sun: new Color(...sea.sun), water: new Color(...sea.water), glint: sea.glint, foam: sea.foam, reflection: new Color(...sea.reflection), sunDirection, flashColor },
+          wakePeriod,
+        )
         this.scene.add(this.#ocean.mesh)
         const crest = message.sea.waves.reduce((sum, wave) => sum + wave.amplitude, 0)
         const camera = this.#camera ?? new ChaseCamera(crest + cameraClearance)
+        camera.minHeight = crest + cameraClearance
         this.#camera = camera
         camera.sensitivity = this.#settings.sensitivity
         const own = message.ships.find((ship) => ship.id === message.shipId)
@@ -686,6 +724,7 @@ export class Game {
     this.#hitIndicator.update(dt, camera.yaw + Math.PI)
     this.effects.update(dt, renderTime, windX, windZ, ocean.sea, camera.camera)
     this.#debris.update(dt, renderTime, ocean.sea, camera.camera.position, windX, windZ)
+    this.#rain.update(renderTime, camera.camera.position, windX, windZ)
     const lights = this.effects.flashLights
     for (let i = 0; i < ocean.flashes.length; i++) {
       const light = lights[i]

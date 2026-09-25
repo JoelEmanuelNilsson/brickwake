@@ -24,10 +24,18 @@ export const maxOceanWaves = 8
 /** Muzzle-flash lights the sea shows, at most. */
 export const maxFlashes = 4
 
-/** What the sea reflects and is lit by: the captured sky, the sun, and the colour of muzzle flashes. */
+/** What the sea reflects and is lit by: the captured sky, the sun, the weather's water tint and glint, and the colour of muzzle flashes. */
 export interface OceanLighting {
   readonly sky: CubeTexture
   readonly sun: Color
+  /** Multiplies the water's own deep and shallow colours. */
+  readonly water: Color
+  /** Sun glint strength, 1 under a clear sky. */
+  readonly glint: number
+  /** Brightness of foam, 1 under a clear sky. */
+  readonly foam: number
+  /** Tint of the sky the sea reflects away from the sun's path. */
+  readonly reflection: Color
   readonly sunDirection: Vector3
   readonly flashColor: Color
 }
@@ -159,6 +167,10 @@ const fragmentShader = /* glsl */ `
   uniform float waveHeight;
   uniform vec3 sunColor;
   uniform vec3 sunDirection;
+  uniform vec3 waterTint;
+  uniform float glintStrength;
+  uniform float foamLight;
+  uniform vec3 reflectionTint;
   uniform vec4 flashes[FLASHES]; // position, intensity (cd)
   uniform vec3 flashColor;
   uniform float fogDensity;
@@ -182,20 +194,21 @@ const fragmentShader = /* glsl */ `
     vec3 reflected = reflect(-view, normal);
     reflected.y = max(reflected.y, 0.005);
     float toSun = max(dot(normalize(reflected), sunDirection), 0.0);
-    // The sky is graded amber; away from the sun's path the sea reflects it cooled, keeping ref-01's dark teal water.
-    vec3 sky = textureCube(skyCube, reflected).rgb * mix(vec3(0.45, 1.2, 2.2), vec3(1.0), pow(toSun, 6.0));
-    vec3 glint = vec3(9.0, 6.5, 4.0) * pow(toSun, 900.0) * (1.0 - smoothstep(400.0, 1400.0, distance));
+    // A clear sky is graded amber; away from the sun's path the sea reflects it cooled, keeping ref-01's dark teal water.
+    vec3 sky = textureCube(skyCube, reflected).rgb * mix(reflectionTint, vec3(1.0), pow(toSun, 6.0));
+    vec3 glint = vec3(9.0, 6.5, 4.0) * glintStrength * pow(toSun, 900.0) * (1.0 - smoothstep(400.0, 1400.0, distance));
 
     float crest = clamp(vHeight / max(waveHeight, 0.01) * 0.5 + 0.5, 0.0, 1.0);
-    vec3 deep = vec3(0.004, 0.028, 0.034);
-    vec3 shallow = vec3(0.02, 0.16, 0.15);
+    vec3 deep = vec3(0.004, 0.028, 0.034) * waterTint;
+    vec3 shallow = vec3(0.02, 0.16, 0.15) * waterTint;
     // Light through the thin tops of swells facing away from the sun reads as teal.
     float scatter = crest * crest * (0.35 + 0.65 * max(dot(-view, sunDirection), 0.0)) * max(dot(vNormal, vec3(0.0, 1.0, 0.0)), 0.0);
     vec3 water = mix(deep, shallow, scatter) + sunColor * 0.012 * max(dot(normal, sunDirection), 0.0);
 
     float foamNoise = texture2D(ripples, vWorld.xz / 5.0 + rippleTime * 0.02).x;
     float foamMask = smoothstep(0.9, 0.75, vJacobian) * smoothstep(0.55, 0.9, crest);
-    float crestFoam = smoothstep(0.45, 0.75, foamMask * (0.35 + foamNoise)) * (1.0 - smoothstep(250.0, 900.0, distance));
+    // Farther out the noise mips to its mean and crest foam would merge into flat sheets, so it fades out long before the swell.
+    float crestFoam = smoothstep(0.45, 0.75, foamMask * (0.35 + foamNoise)) * (1.0 - smoothstep(40.0, 200.0, distance));
     // Hull and wake foam: dense where fresh, breaking into lace as it thins.
     float laid = texture2D(wake, vWorld.xz / wakePeriod).r * (1.0 - smoothstep(260.0, 420.0, distance));
     float lace = texture2D(ripples, vWorld.xz / 3.1 - rippleTime * 0.01).y;
@@ -216,7 +229,7 @@ const fragmentShader = /* glsl */ `
     flash *= flashColor;
 
     vec3 color = mix(water, sky, fresnel) + glint + flash;
-    color = mix(color, vec3(0.9, 0.85, 0.8) * (0.35 + 0.65 * max(dot(normal, sunDirection), 0.2)) + flash * 25.0, foam * 0.85);
+    color = mix(color, vec3(0.9, 0.85, 0.8) * foamLight * (0.35 + 0.65 * max(dot(normal, sunDirection), 0.2)) + flash * 25.0, foam * 0.85);
     // Fog toward the sky's own horizon in this direction, so the sea meets the sky without a seam.
     float fogFactor = 1.0 - exp(-fogDensity * fogDensity * distance * distance);
     vec3 horizon = textureCube(skyCube, normalize(vec3(-view.x, 0.02, -view.z))).rgb;
@@ -257,6 +270,10 @@ export class OceanSurface {
           rippleTime: { value: 0 },
           waveHeight: { value: sea.waves.reduce((sum, wave) => sum + wave.amplitude, 0) },
           sunColor: { value: lighting.sun },
+          waterTint: { value: lighting.water },
+          glintStrength: { value: lighting.glint },
+          foamLight: { value: lighting.foam },
+          reflectionTint: { value: lighting.reflection },
           sunDirection: { value: lighting.sunDirection },
           flashColor: { value: lighting.flashColor },
           wakePeriod: { value: wakePeriod },

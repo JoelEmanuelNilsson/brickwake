@@ -10,7 +10,7 @@ export interface Wind {
   readonly speed: number
   readonly baseToward: number
   readonly baseSpeed: number
-  /** Gust strength 0…1; 0 holds the wind steady. */
+  /** Gust strength: 0 holds the wind steady, 1 the usual gusts; weather scales it. */
   readonly gustiness: number
   /** The gust being eased toward, and ticks until the next one is drawn. */
   readonly gust: { readonly speed: number; readonly toward: number; readonly ticksLeft: number }

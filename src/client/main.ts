@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { MatchModeSchema, ScenarioNameSchema } from "../protocol/messages.ts"
+import { MatchModeSchema, ScenarioNameSchema, WeatherNameSchema } from "../protocol/messages.ts"
 import { ffaRules, tdmRules } from "../sim/rules.ts"
 import { Game, modeKey } from "./game/game.ts"
 import { graphicsFor, loadSettings } from "./game/settings.ts"
@@ -28,6 +28,8 @@ const params = new URLSearchParams(location.search)
 const scenario = params.get("scenario")
 const isScenario = Schema.is(ScenarioNameSchema)
 const isMode = Schema.is(MatchModeSchema)
+const isWeather = Schema.is(WeatherNameSchema)
+const weather = params.get("weather")
 const mode = params.get("mode") ?? localStorage.getItem(modeKey)
 if (scenario !== null && !isScenario(scenario)) {
   overlay.dataset.state = "error"
@@ -38,6 +40,7 @@ if (scenario !== null && !isScenario(scenario)) {
     scenario: scenario ?? undefined,
     // With a scenario, clients naming the same room share it (two-browser tests).
     room: room ?? undefined,
+    weather: isWeather(weather) ? weather : undefined,
     mode: isMode(mode) ? mode : "ffa",
     // Starting camera angle off the stern in degrees, for screenshots from the side or bow.
     orbit: (Number(params.get("orbit") ?? 0) * Math.PI) / 180,

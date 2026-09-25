@@ -65,6 +65,10 @@ each other and with what the player sees.
 - Wind: one match wind (direction, strength, slow gusts from the seeded RNG). Sail
   force depends on the sail level and the angle to the wind (points of sail). Force
   at the sail's height heels the ship to leeward.
+- Weather: each match draws one of clear, overcast, fog or storm from its seed and
+  keeps it. It scales the base sea's wave heights and the wind's speed and gusts
+  (`weatherEffects`), and sets the sky, light, fog, sea colour and rain on the client.
+  Wind stays near 1×: heel grows steeply with it.
 - Hull: a keel resists sideways motion far more than forward motion, which turns
   sail force into forward drive with some leeway. Drag rises with speed.
 - Rudder: force proportional to water speed past it, so a stopped ship barely turns

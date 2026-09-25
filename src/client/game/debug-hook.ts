@@ -3,6 +3,7 @@ import type { ServerEvent } from "../../protocol/messages.ts"
 import type { AudioStats, GameAudio } from "../audio/game-audio.ts"
 import { navyFleurLivery, navyLionLivery, pirateLivery, type SailLivery } from "../rig/sail-livery.ts"
 import { sampleOcean, type SeaState } from "../../sim/ocean.ts"
+import type { WeatherName } from "../../sim/weather.ts"
 import { angleOfDirection, rotate, vec3, type Quat } from "../../sim/vector.ts"
 import type { ChaseCamera } from "./chase-camera.ts"
 import type { ConnectionState } from "./connection.ts"
@@ -55,6 +56,7 @@ export interface DebugMatch {
   /** Sim time drawn now; compare with the phase's times. */
   readonly renderTime: number
   readonly hud: MatchHudText
+  readonly weather: WeatherName
 }
 
 /** Live effects: particles per layer, chips, balls drawn in flight, and camera shake 0…1. */
@@ -187,6 +189,7 @@ export interface DebugSource {
   readonly debris: () => BrickDebris
   readonly audio: () => GameAudio
   readonly match: () => MatchReading
+  readonly weather: () => WeatherName
   readonly matchHud: () => MatchHud
   readonly measure: (frames: number) => FrameMeasure
   readonly wreck: (id: string) => { readonly gone: ReadonlyArray<number>; readonly drawnParts: number } | undefined
@@ -292,7 +295,7 @@ export const installDebugHook = (source: DebugSource): void => {
     match: () => {
       if (source.shipId() === null) return null
       const reading = source.match()
-      return { phase: reading.phase, rules: reading.rules, teamSinks: reading.teamSinks, renderTime: reading.renderTime, hud: source.matchHud().shown() }
+      return { phase: reading.phase, rules: reading.rules, teamSinks: reading.teamSinks, renderTime: reading.renderTime, hud: source.matchHud().shown(), weather: source.weather() }
     },
     fire: () => source.gunnery().fire(),
     fireAt: ([x, y, z]) => source.gunnery().fire({ x, y, z }),

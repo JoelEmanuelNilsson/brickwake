@@ -23,7 +23,8 @@ import { makeShip, shipId, stepShip, type ShipControls, type ShipId, type ShipSt
 import { hitDamage, type DamageZone } from "./ship/damage.ts"
 import { SIM_DT, tuning } from "./tuning.ts"
 import { rotate, vec3, type Vec3 } from "./vector.ts"
-import { stepWind, type Wind } from "./wind.ts"
+import { applyWeather, drawWeather, scaleSea, weatherEffects, type WeatherName } from "./weather.ts"
+import { makeWind, stepWind, type Wind } from "./wind.ts"
 import { shipFlooding, strikeWreck } from "./wreck.ts"
 
 /** Everything that decides a match's outcome. Replays exactly from its seed and the inputs per tick. */
@@ -32,6 +33,8 @@ export interface MatchState {
   readonly rules: MatchRules
   readonly phase: MatchPhase
   readonly rng: RngState
+  readonly weather: WeatherName
+  /** The sea and wind as the weather has scaled them. */
   readonly sea: SeaState
   readonly wind: Wind
   readonly ships: ReadonlyArray<ShipState>
@@ -199,21 +202,26 @@ export const spawnPoint = (state: MatchState, id: ShipId, team: Team | undefined
   return team === undefined ? spawn : { ...spawn, team }
 }
 
-/** A match at tick 0, in warmup or, when `rules` has none, in play. Rules default to FFA quick play. */
+/**
+ * A match at tick 0, in warmup or, when `rules` has none, in play. Rules default to FFA quick play. `sea` and `wind`
+ * are the base conditions `weather` scales; left out, the weather is the match RNG's first draw.
+ */
 export const createMatch = (options: {
   readonly seed: number
   readonly rules?: MatchRules
+  readonly weather?: WeatherName
   readonly sea: SeaState
   readonly wind: Wind
   readonly ships: ReadonlyArray<ShipSpawn>
-}): MatchState =>
-  options.ships.reduce(addShip, {
+}): MatchState => {
+  const [weather, rng] = options.weather === undefined ? drawWeather(seedRng(options.seed)) : [options.weather, seedRng(options.seed)]
+  return options.ships.reduce(addShip, {
     tick: 0,
     rules: options.rules ?? ffaRules,
     phase: openingPhase(options.rules ?? ffaRules, 0),
-    rng: seedRng(options.seed),
-    sea: options.sea,
-    wind: options.wind,
+    rng,
+    weather,
+    ...applyWeather(weather, options.sea, options.wind),
     ships: [],
     teamSinks: noTeamSinks,
     balls: [],
@@ -222,6 +230,24 @@ export const createMatch = (options: {
     bots: [],
     botsJoined: 0,
   })
+}
+
+/** The match under another weather, rescaling its sea and wind; ships settle onto the new sea as it steps. */
+export const changeWeather = (state: MatchState, weather: WeatherName): MatchState => {
+  const from = weatherEffects[state.weather]
+  const to = weatherEffects[weather]
+  const wind = state.wind
+  return {
+    ...state,
+    weather,
+    sea: scaleSea(state.sea, to.waveHeight / from.waveHeight),
+    wind: makeWind({
+      toward: wind.baseToward,
+      speed: (wind.baseSpeed * to.windSpeed) / from.windSpeed,
+      gustiness: (wind.gustiness * to.gustiness) / from.gustiness,
+    }),
+  }
+}
 
 const noOrders: BroadsideOrders = new Map()
 
@@ -457,6 +483,7 @@ export const stepMatch = (
       rules: state.rules,
       phase,
       rng: windRng,
+      weather: state.weather,
       sea: state.sea,
       wind,
       ships: moved,

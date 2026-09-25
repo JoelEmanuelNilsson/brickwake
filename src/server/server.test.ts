@@ -7,6 +7,7 @@ import { seas, swell } from "../sim/ocean.ts"
 import { hitDamage } from "../sim/ship/damage.ts"
 import { dummyShipId, duelShipIds, scenarioShipId } from "../sim/scenarios.ts"
 import { SIM_HZ, tuning } from "../sim/tuning.ts"
+import { scaleSea, weatherEffects } from "../sim/weather.ts"
 import type { NetworkLag } from "./lag.ts"
 import * as Server from "./server.ts"
 
@@ -92,7 +93,7 @@ test("a joining client gets a welcome with the match sea, then a full snapshot e
   const welcome = await client.nextOf("welcome", 0)
   expect(welcome.simHz).toBe(SIM_HZ)
   expect(client.socket.extensions).toContain("permessage-deflate")
-  expect(welcome.sea).toEqual(seas.open)
+  expect(welcome.sea).toEqual(scaleSea(seas.open, weatherEffects[welcome.weather].waveHeight))
   expect(welcome.ships.map((ship) => ship.id)).toContain(welcome.shipId)
 
   const first = await client.nextOf("snapshot")
@@ -227,6 +228,13 @@ test("a scenario join starts a private room from that scenario", async () => {
   expect(welcome.shipId).toBe(scenarioShipId)
   expect(welcome.tick).toBe(0)
   expect(welcome.sea).toEqual(swell(-Math.PI / 2))
+  expect(welcome.weather).toBe("clear")
+  const stormy = await connect(server.url)
+  stormy.send({ _tag: "join", mode: "ffa", scenario: "beam-sea", weather: "storm" })
+  const storm = await stormy.nextOf("welcome", 0)
+  expect(storm.weather).toBe("storm")
+  expect(storm.sea).toEqual(scaleSea(swell(-Math.PI / 2), weatherEffects.storm.waveHeight))
+  await stormy.close()
   const other = await connect(server.url)
   other.send({ _tag: "join", mode: "ffa" })
   expect((await other.nextOf("welcome", 0)).ships.map((ship) => ship.id)).not.toContain(scenarioShipId)
