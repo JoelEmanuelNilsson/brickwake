@@ -45,60 +45,72 @@ const addClicks = (
 const addBubble = (target: Float32Array, sampleRate: number, at: number, frequency: number, decay: number, gain: number) =>
   addChirp(target, sampleRate, { start: at, from: frequency, to: frequency * 1.6, glideSeconds: decay * 3, attackSeconds: 0.002, decaySeconds: decay, gain })
 
+/** Rolling thunder: `source` shaped by attack/decay swells starting at each of `rolls` seconds, each 0.75× the last, in place. */
+const rollInto = (source: Float32Array, sampleRate: number, rolls: ReadonlyArray<number>, decay: number) => {
+  for (let i = 0; i < source.length; i++) {
+    const t = i / sampleRate
+    let env = 0
+    for (let k = 0; k < rolls.length; k++) {
+      const s = t - (rolls[k] ?? 0)
+      if (s > 0) env += (1 - Math.exp(-s / 0.05)) * Math.exp(-s / decay) * 0.75 ** k
+    }
+    source[i] = (source[i] ?? 0) * env
+  }
+  return source
+}
+
 /**
- * A 24-pounder heard from on deck or within ~100 m: an N-wave crack, a 110→38 Hz body saturated so laptop speakers carry
- * its harmonics, the roar of the powder, a low rumble and two echoes off the water. 3.2 s.
+ * A 24-pounder heard from on deck or within ~100 m: an N-wave crack, a sub thump felt more than heard, a 115→38 Hz
+ * body saturated so laptop speakers carry its harmonics, the roar of the powder, a long rumbling tail and the report
+ * coming back off the water and distant hulls as rolling echoes. 5 s.
  */
 export const synthCannonBoom = (sampleRate: number, seed: number): Float32Array => {
   const random = seededRandom(seed)
-  const n = Math.round(3.2 * sampleRate)
+  const n = Math.round(5 * sampleRate)
   const out = new Float32Array(n)
   const nWave = 0.0032 * (0.85 + 0.3 * random())
   for (let i = 0; i < Math.round(2 * nWave * sampleRate); i++) out[i] = 0.9 * (1 - i / sampleRate / nWave)
   mixInto(out, envelope(filtered(whiteNoise(n, random), sampleRate, "lowpass", 7000, 0.7), sampleRate, 0, 0.0003, 0.014), 0, 0.8)
   const body = 1.05 + 0.1 * random()
-  addChirp(out, sampleRate, { start: 0, from: 115 * body, to: 38 * body, glideSeconds: 0.05, attackSeconds: 0.002, decaySeconds: 0.2, gain: 1 })
-  addChirp(out, sampleRate, { start: 0.004, from: 70 * body, to: 31 * body, glideSeconds: 0.08, attackSeconds: 0.01, decaySeconds: 0.4, gain: 0.5 })
-  const roar = normalizePeak(filtered(whiteNoise(n, random), sampleRate, "bandpass", 550 + 300 * random(), 0.6), 1)
-  mixInto(out, envelope(roar, sampleRate, 0.001, 0.002, 0.14), 0, 2.2)
+  addChirp(out, sampleRate, { start: 0, from: 115 * body, to: 38 * body, glideSeconds: 0.06, attackSeconds: 0.002, decaySeconds: 0.28, gain: 1 })
+  addChirp(out, sampleRate, { start: 0.004, from: 70 * body, to: 31 * body, glideSeconds: 0.1, attackSeconds: 0.01, decaySeconds: 0.5, gain: 0.55 })
+  const roar = normalizePeak(filtered(whiteNoise(n, random), sampleRate, "bandpass", 450 + 250 * random(), 0.6), 1)
+  mixInto(out, envelope(roar, sampleRate, 0.001, 0.002, 0.18), 0, 2.2)
   const crackle = normalizePeak(filtered(whiteNoise(n, random), sampleRate, "bandpass", 2500, 0.8), 1)
   mixInto(out, envelope(crackle, sampleRate, 0.002, 0.003, 0.05), 0, 1.2)
-  const rumble = filtered(filtered(brownNoise(n, random), sampleRate, "lowpass", 180, 0.7), sampleRate, "highpass", 25, 0.7)
+  const rumble = filtered(filtered(brownNoise(n, random), sampleRate, "lowpass", 160, 0.7), sampleRate, "highpass", 22, 0.7)
   const flutter = 2.5 + 2 * random()
   for (let i = 0; i < n; i++) rumble[i] = (rumble[i] ?? 0) * (1 + 0.35 * Math.sin((2 * Math.PI * flutter * i) / sampleRate))
-  mixInto(out, normalizePeak(envelope(rumble, sampleRate, 0.005, 0.02, 0.75), 1), 0, 0.55)
-  const tail = envelope(filtered(whiteNoise(n, random), sampleRate, "lowpass", 450, 0.6), sampleRate, 0.03, 0.08, 0.9)
-  mixInto(out, tail, 0, 0.12)
-  const head = filtered(out.slice(0, Math.round(0.3 * sampleRate)), sampleRate, "lowpass", 1400, 0.7)
-  mixInto(out, head, Math.round((0.07 + 0.05 * random()) * sampleRate), 0.28)
-  mixInto(out, head, Math.round((0.16 + 0.08 * random()) * sampleRate), 0.14)
-  return fadeEdges(normalizePeak(saturate(normalizePeak(out, 1), 1.7), 0.95), sampleRate, 0, 0.3)
+  mixInto(out, normalizePeak(envelope(rumble, sampleRate, 0.005, 0.03, 1.2), 1), 0, 0.6)
+  const tail = envelope(filtered(whiteNoise(n, random), sampleRate, "lowpass", 380, 0.6), sampleRate, 0.03, 0.12, 1.6)
+  mixInto(out, tail, 0, 0.15)
+  const head = filtered(out.slice(0, Math.round(0.4 * sampleRate)), sampleRate, "lowpass", 1100, 0.7)
+  mixInto(out, head, Math.round((0.07 + 0.05 * random()) * sampleRate), 0.3)
+  mixInto(out, head, Math.round((0.16 + 0.08 * random()) * sampleRate), 0.16)
+  const echo = normalizePeak(filtered(filtered(whiteNoise(n, random), sampleRate, "lowpass", 300, 0.7), sampleRate, "highpass", 30, 0.7), 1)
+  mixInto(out, rollInto(echo, sampleRate, [0.45 + 0.15 * random(), 0.9 + 0.3 * random(), 1.6 + 0.4 * random()], 0.6), 0, 0.3)
+  const heavy = saturate(normalizePeak(out, 1), 1.7)
+  // The sub thump goes in after the saturator so it stays a clean, round push rather than buzz.
+  addChirp(heavy, sampleRate, { start: 0.002, from: 58 * body, to: 27, glideSeconds: 0.14, attackSeconds: 0.006, decaySeconds: 0.4, gain: 0.45 })
+  return fadeEdges(normalizePeak(heavy, 0.95), sampleRate, 0, 0.5)
 }
 
 /**
  * A 24-pounder from a few hundred metres: the crack is gone, a dull thud and a low rolling rumble that arrives in
- * several smeared rolls, like thunder. 4.5 s.
+ * several smeared rolls, like thunder, over a sub push. 5 s.
  */
 export const synthDistantBoom = (sampleRate: number, seed: number): Float32Array => {
   const random = seededRandom(seed)
-  const n = Math.round(4.5 * sampleRate)
+  const n = Math.round(5 * sampleRate)
   const out = new Float32Array(n)
   addChirp(out, sampleRate, { start: 0, from: 70, to: 33, glideSeconds: 0.1, attackSeconds: 0.008, decaySeconds: 0.38, gain: 1.2 })
-  const thud = normalizePeak(filtered(whiteNoise(n, random), sampleRate, "lowpass", 700, 0.7), 1)
+  const thud = normalizePeak(filtered(whiteNoise(n, random), sampleRate, "lowpass", 450, 0.7), 1)
   mixInto(out, envelope(thud, sampleRate, 0, 0.004, 0.12), 0, 2.2)
-  const rumble = normalizePeak(filtered(filtered(whiteNoise(n, random), sampleRate, "lowpass", 420, 0.7), sampleRate, "highpass", 35, 0.7), 1)
-  const rolls = [0, 0.12 + 0.1 * random(), 0.35 + 0.2 * random(), 0.8 + 0.3 * random(), 1.4 + 0.4 * random()]
-  for (let i = 0; i < n; i++) {
-    const t = i / sampleRate
-    let env = 0
-    for (let k = 0; k < rolls.length; k++) {
-      const s = t - (rolls[k] ?? 0)
-      if (s > 0) env += (1 - Math.exp(-s / 0.05)) * Math.exp(-s / 0.55) * 0.75 ** k
-    }
-    rumble[i] = (rumble[i] ?? 0) * env
-  }
-  mixInto(out, rumble, 0, 1.6)
-  return fadeEdges(normalizePeak(saturate(normalizePeak(out, 1), 1.4), 0.95), sampleRate, 0.002, 0.6)
+  const rumble = normalizePeak(filtered(filtered(whiteNoise(n, random), sampleRate, "lowpass", 220, 0.7), sampleRate, "highpass", 30, 0.7), 1)
+  mixInto(out, rollInto(rumble, sampleRate, [0, 0.12 + 0.1 * random(), 0.35 + 0.2 * random(), 0.8 + 0.3 * random(), 1.4 + 0.4 * random(), 2.2 + 0.5 * random()], 0.7), 0, 1.8)
+  const heavy = saturate(normalizePeak(out, 1), 1.4)
+  addChirp(heavy, sampleRate, { start: 0.004, from: 48, to: 26, glideSeconds: 0.18, attackSeconds: 0.012, decaySeconds: 0.5, gain: 0.6 })
+  return fadeEdges(normalizePeak(heavy, 0.95), sampleRate, 0.002, 0.8)
 }
 
 /** A ball striking the sea: slap, cavity bloop, spray hiss, the column falling back and scattered droplets. 1.8 s. */
@@ -122,7 +134,7 @@ export const synthSplash = (sampleRate: number, seed: number): Float32Array => {
   return fadeEdges(normalizePeak(out, 0.9), sampleRate, 0, 0.2)
 }
 
-/** A ball smashing into the brick-and-timber hull: snap, struck-wood modes, a thud and a spray of splinter crackles. 0.9 s. */
+/** A ball smashing into the brick-and-timber hull: snap, struck-wood modes, a thud, the grinding crunch of timber and brick giving way, and splinter crackles. 0.9 s. */
 export const synthHullCrack = (sampleRate: number, seed: number): Float32Array => {
   const random = seededRandom(seed)
   const n = Math.round(0.9 * sampleRate)
@@ -137,6 +149,15 @@ export const synthHullCrack = (sampleRate: number, seed: number): Float32Array =
   ] as const
   for (const [f, decay, g] of modes) addMode(out, sampleRate, 0.0005, f * (0.9 + 0.2 * random()), decay, g)
   addChirp(out, sampleRate, { start: 0, from: 95, to: 60, glideSeconds: 0.04, attackSeconds: 0.001, decaySeconds: 0.07, gain: 0.8 })
+  const crunch = normalizePeak(filtered(whiteNoise(n, random), sampleRate, "bandpass", 650 + 250 * random(), 0.7), 1)
+  const grains = new Float32Array(n)
+  for (let k = 0; k < 90; k++) {
+    const at = 0.16 * random() ** 1.6
+    const g = (0.4 + 0.6 * random()) * Math.exp(-at / 0.07)
+    for (let i = Math.round(at * sampleRate), end = Math.min(n, i + Math.round(0.012 * sampleRate)), start = i; i < end; i++) grains[i] = (grains[i] ?? 0) + g * Math.exp(-(i - start) / (0.003 * sampleRate))
+  }
+  for (let i = 0; i < n; i++) crunch[i] = (crunch[i] ?? 0) * Math.min(1.5, grains[i] ?? 0)
+  mixInto(out, crunch, 0, 0.9)
   addClicks(out, sampleRate, random, { count: 45, from: 0.004, spread: 0.35, low: 900, high: 5200, decay: 0.004, gain: 0.35 })
   return fadeEdges(normalizePeak(saturate(normalizePeak(out, 1), 1.2), 0.95), sampleRate, 0, 0.1)
 }

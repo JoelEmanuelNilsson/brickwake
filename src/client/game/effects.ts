@@ -1,5 +1,5 @@
 import { CanvasTexture, Color, PointLight, type Camera, type Scene, type Texture, type Vector3 } from "three"
-import type { SeaState } from "../../sim/ocean.ts"
+import { oceanHeight, type SeaState } from "../../sim/ocean.ts"
 import { chipSpawn, ChipLayer } from "./debris.ts"
 import { ParticleLayer, ParticleShape, particleSpawn, type ParticleLayerOptions } from "./particles.ts"
 
@@ -160,6 +160,8 @@ export class Effects {
   readonly #lightAge = new Float32Array(lightCount).fill(Number.POSITIVE_INFINITY)
   readonly #lightPeak = new Float32Array(lightCount)
   #nextLight = 0
+  #sea: SeaState | undefined
+  #seaTime = 0
   readonly #p = particleSpawn()
   readonly #c = chipSpawn()
 
@@ -219,18 +221,23 @@ export class Effects {
   }
 
   /**
-   * One gun fires from (x, y, z) along the unit barrel (dx, dy, dz): a cone of flame and a light, sparks, burning wadding,
-   * and a thick bank of smoke that lingers and drifts downwind.
+   * One gun fires from (x, y, z) along the unit barrel (dx, dy, dz): a white-hot flash and light, a cone of flame, sparks
+   * and burning wadding, a jet of smoke whose head rolls out as a ring and then hangs and drifts downwind for half a
+   * minute, and the blast slapping the water below: a fast ring and a sheet of spray.
    */
   muzzle(x: number, y: number, z: number, dx: number, dy: number, dz: number): void {
     const p = this.#p
-    this.#at(x + dx * 1.4, y + dy * 1.4, z + dz * 1.4)
-    this.#look(0, 0, 0, 5, 8.5, 0.12, 6, 3.4, 1.2, 1)
+    this.#at(x + dx * 1.2, y + dy * 1.2, z + dz * 1.2)
+    this.#look(0, 0, 0, 7, 11, 0.07, 12, 9, 6, 1)
     p.rotation = Math.random() * Math.PI * 2
     this.fire.emit(p)
-    for (const [out, size] of [[0.9, 2.6], [2, 3.2], [3.3, 2.8], [4.7, 2]] as const) {
+    this.#at(x + dx * 1.4, y + dy * 1.4, z + dz * 1.4)
+    this.#look(0, 0, 0, 5, 8.5, 0.14, 6, 3.4, 1.2, 1)
+    p.rotation = Math.random() * Math.PI * 2
+    this.fire.emit(p)
+    for (const [out, size] of [[0.9, 2.8], [2, 3.6], [3.3, 3.2], [4.7, 2.4], [6.2, 1.6]] as const) {
       this.#at(x + dx * out, y + dy * out, z + dz * out)
-      this.#look(dx * 6, dy * 6, dz * 6, size, size * 1.6, random(0.07, 0.11), 7, 3.6, 1.1, 1)
+      this.#look(dx * 6, dy * 6, dz * 6, size, size * 1.6, random(0.07, 0.12), 8, 4.2, 1.3, 1)
       p.rotation = Math.random() * Math.PI * 2
       this.fire.emit(p)
     }
@@ -243,7 +250,7 @@ export class Effects {
       p.shape = ParticleShape.streak
       this.sparks.emit(p)
     }
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 6; i++) {
       const out = random(0.8, 4)
       const speed = random(25, 80)
       this.#at(x + dx * out, y + dy * out, z + dz * out)
@@ -261,30 +268,85 @@ export class Effects {
       p.shape = ParticleShape.streak
       this.sparks.emit(p)
     }
-    for (let i = 0; i < 4; i++) {
-      this.#at(x + dx * random(0.5, 2.5), y + dy + random(-0.3, 0.6), z + dz * random(0.5, 2.5))
-      this.#look(dx * random(4, 12), random(0.5, 2), dz * random(4, 12), random(2.5, 3.5), random(7, 10), random(2.5, 4), 0.3, 0.29, 0.28, 0.9)
-      this.#drift(1.8, 0.4, -0.2)
+    // The jet: dense, dark-cored puffs shot out along the barrel that pile up where the drag stops them.
+    for (let i = 0; i < 7; i++) {
+      const speed = random(6, 40)
+      this.#at(x + dx * random(0.5, 2.5), y + dy * random(0.5, 2.5) + jitter(0.3), z + dz * random(0.5, 2.5))
+      const tone = random(0.5, 0.8)
+      this.#look(dx * speed + jitter(2), dy * speed + random(0, 1.5), dz * speed + jitter(2), random(2.2, 3.2), random(14, 22), random(8, 16), tone, tone * 0.97, tone * 0.93, random(0.75, 0.95))
+      this.#drift(random(1.3, 2), 0.55, -0.1)
       this.smoke.emit(p)
     }
-    for (let i = 0; i < 12; i++) {
-      const out = random(1, 6)
-      const speed = random(8, 45)
-      this.#at(x + dx * out, y + dy * out + jitter(0.5), z + dz * out)
-      const tone = random(0.85, 1.12)
-      this.#look(dx * speed + jitter(4), dy * speed + random(0, 3), dz * speed + jitter(4), random(3, 4), random(18, 28), random(16, 26), 0.8 * tone, 0.77 * tone, 0.72 * tone, random(0.55, 0.8))
-      this.#drift(random(1, 1.5), 0.5, -0.12)
+    // The head of the jet curls back on itself: a ring of puffs rolling outward round the barrel's line.
+    const sideX = -dz
+    const sideZ = dx
+    const across = Math.hypot(sideX, sideZ) || 1
+    const ux = sideX / across
+    const uz = sideZ / across
+    const ring = 7
+    const turn = Math.random() * Math.PI * 2
+    for (let i = 0; i < ring; i++) {
+      const a = turn + (i / ring) * Math.PI * 2
+      const c = Math.cos(a)
+      const sn = Math.sin(a)
+      const rx = ux * c
+      const ry = sn
+      const rz = uz * c
+      const speed = random(22, 32)
+      const out = random(3, 4.5)
+      this.#at(x + dx * out + rx * 0.8, y + dy * out + ry * 0.8, z + dz * out + rz * 0.8)
+      const tone = random(0.78, 1.05)
+      this.#look(dx * speed + rx * random(4, 7), dy * speed + ry * random(4, 7) + 0.5, dz * speed + rz * random(4, 7), random(2.6, 3.6), random(20, 28), random(18, 28), 0.82 * tone, 0.8 * tone, 0.76 * tone, random(0.6, 0.8))
+      this.#drift(random(1.1, 1.5), 0.6, -0.14)
+      p.spin = (i % 2 === 0 ? 1 : -1) * random(0.3, 0.6)
       this.smoke.emit(p)
     }
     // A low bank hugging the water, as the heavy smoke of a broadside settles and rolls downwind.
     for (let i = 0; i < 2; i++) {
-      const out = random(4, 12)
+      const out = random(5, 12)
       this.#at(x + dx * out, Math.max(0.8, y - 2 + random(0, 1)), z + dz * out)
-      this.#look(dx * random(4, 10), 0, dz * random(4, 10), random(5, 7), random(26, 34), random(22, 30), 0.78, 0.76, 0.72, 0.6)
+      this.#look(dx * random(4, 10), 0, dz * random(4, 10), random(5, 7), random(24, 32), random(22, 30), 0.78, 0.76, 0.72, 0.45)
       this.#drift(0.9, 0.55, 0)
       this.smoke.emit(p)
     }
-    this.flash(x + dx * 3, y + dy * 3 + 0.5, z + dz * 3, 1)
+    this.#blastOnWater(x + dx * 3, y, z + dz * 3, dx, dz)
+    this.flash(x + dx * 3, y + dy * 3 + 0.5, z + dz * 3, 1.4)
+  }
+
+  /** The muzzle blast at height `y` slaps the sea under (x, z), outward along (dx, dz): a racing ring, a flattened sheet of spray and mist. */
+  #blastOnWater(x: number, y: number, z: number, dx: number, dz: number) {
+    const sea = this.#sea
+    const water = sea === undefined ? 0 : oceanHeight(sea, x, z, this.#seaTime)
+    const height = y - water
+    if (height > 8) return
+    const k = 1 - Math.max(0, height) / 10
+    const p = this.#p
+    this.#at(x, water, z)
+    this.#look(0, 0, 0, 2, 22 * k, 0.8, 0.95, 0.98, 1, 0.6 * k)
+    p.shape = ParticleShape.flat
+    p.rotation = Math.random() * Math.PI * 2
+    this.foam.emit(p)
+    this.#at(x + dx * 4, water, z + dz * 4)
+    this.#look(dx * 3, 0, dz * 3, 4, 26 * k, 2.6, 0.92, 0.96, 0.98, 0.35 * k)
+    p.shape = ParticleShape.flat
+    p.rotation = Math.random() * Math.PI * 2
+    this.foam.emit(p)
+    for (let i = 0; i < 12; i++) {
+      const a = Math.atan2(dz, dx) + jitter(1.1)
+      const speed = random(6, 16) * k
+      this.#at(x + Math.cos(a) * 1.5, water + 0.2, z + Math.sin(a) * 1.5)
+      this.#look(Math.cos(a) * speed, random(1.5, 4), Math.sin(a) * speed, random(0.2, 0.4), 0.2, 1.5, 1.2, 1.25, 1.3, 0.8)
+      p.gravity = 9.81
+      p.shape = ParticleShape.streak
+      this.droplets.emit(p)
+    }
+    for (let i = 0; i < 3; i++) {
+      const out = random(2, 8)
+      this.#at(x + dx * out + jitter(1.5), water + random(0.3, 1), z + dz * out + jitter(1.5))
+      this.#look(dx * random(4, 9), random(0.3, 1.2), dz * random(4, 9), 2 * k, random(7, 11) * k, random(1.2, 2), 1.0, 1.04, 1.08, 0.4 * k)
+      this.#drift(1.2, 0.6, 0)
+      this.spray.emit(p)
+    }
   }
 
   /** A brief warm light at (x, y, z) that also lights the sea; `strength` 1 is a muzzle flash. */
@@ -344,15 +406,25 @@ export class Effects {
   splash(x: number, y: number, z: number, speed: number): void {
     const k = Math.min(2.2, Math.max(0.5, speed / 75))
     const p = this.#p
-    // The column: a tight, tall jet, thickest at its foot.
-    for (let i = 0; i < 10; i++) {
-      const rise = i / 9
+    // The column: a tight, tall jet, thickest at its foot, that stands 15–20 m before it falls back.
+    for (let i = 0; i < 14; i++) {
+      const rise = i / 13
       this.#at(x + jitter(0.35 * k), y + 0.2, z + jitter(0.35 * k))
-      this.#look(jitter(0.6), (10 + 12 * rise) * k, jitter(0.6), (1.2 - 0.5 * rise) * k, (2.2 - rise) * k, 1.6 + 1.4 * rise, 1.1, 1.15, 1.2, 0.7)
+      this.#look(jitter(0.5), (11 + 15 * rise) * k, jitter(0.5), (1.3 - 0.5 * rise) * k, (2.6 - rise) * k, 1.8 + 1.8 * rise, 1.15, 1.2, 1.25, 0.75)
       p.gravity = 9.81
-      p.drag = 0.25
+      p.drag = 0.2
       p.windShare = 0.3
       p.shape = ParticleShape.streak
+      this.spray.emit(p)
+    }
+    // Mist thrown up with it that hangs where the column stood, so it reads as a pillar for a few seconds.
+    for (let i = 0; i < 5; i++) {
+      this.#at(x + jitter(0.5 * k), y + 1, z + jitter(0.5 * k))
+      this.#look(jitter(0.8), random(6, 22) * k, jitter(0.8), 1.6 * k, random(5, 8) * k, random(2.5, 4), 1.05, 1.1, 1.14, 0.45)
+      p.drag = 1.1
+      p.gravity = 0.6
+      p.windShare = 0.6
+      p.rotation = Math.random() * Math.PI * 2
       this.spray.emit(p)
     }
     for (let i = 0; i < 22; i++) {
@@ -423,17 +495,17 @@ export class Effects {
       c.life = random(4, 8)
       this.chips.throw(c)
     }
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 18; i++) {
       c.x = x
       c.y = y
       c.z = z
-      const speed = random(4, 12)
+      const speed = random(4, 16)
       c.vx = -dx * speed + jitter(6)
       c.vy = random(2, 9)
       c.vz = -dz * speed + jitter(6)
       c.sx = 0.07
       c.sy = 0.07
-      c.sz = random(0.6, 1.3)
+      c.sz = random(0.6, 1.6)
       c.color.copy(splinterColor)
       c.life = random(3, 6)
       this.chips.throw(c)
@@ -618,6 +690,8 @@ export class Effects {
 
   /** Advances every effect by `dt` seconds; `time` is the sim time the sea is drawn at, wind in m/s. */
   update(dt: number, time: number, windX: number, windZ: number, sea: SeaState | undefined, camera: Camera): void {
+    this.#sea = sea
+    this.#seaTime = time
     for (const layer of this.#layers) layer.update(dt, time, windX, windZ, sea, camera)
     this.chips.update(dt, time, sea)
     for (let i = 0; i < lightCount; i++) {

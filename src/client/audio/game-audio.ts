@@ -15,7 +15,7 @@ const stealFadeSeconds = 0.005
 const ambienceStepSeconds = 0.1
 const ambienceGlideSeconds = 0.4
 /** Balls passing closer than this to the listener whistle, metres. */
-const whistleRange = 35
+const whistleRange = 50
 const ambienceBusGain = 0.55
 const defaultVolume = 0.8
 /** Share of the master gain left while the pause menu is up: the battle goes on, heard from further off. */
@@ -26,7 +26,7 @@ const pausedShare = 0.3
  * (`reach`, metres). Tuned so an own-ship broadside, a 12-ship battle and the sea sit together under the limiter.
  */
 const mix = {
-  cannon: { level: 1, reach: 25 },
+  cannon: { level: 1, reach: 40 },
   splash: { level: 0.55, reach: 30 },
   hullCrack: { level: 0.85, reach: 25 },
   splinters: { level: 0.45, reach: 15 },

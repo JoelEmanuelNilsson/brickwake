@@ -1,4 +1,16 @@
-import { DynamicDrawUsage, InstancedMesh, Matrix4, MeshStandardMaterial, SphereGeometry, type Scene } from "three"
+import {
+  BufferGeometry,
+  DoubleSide,
+  DynamicDrawUsage,
+  Float32BufferAttribute,
+  InstancedMesh,
+  Matrix4,
+  MeshBasicMaterial,
+  MeshStandardMaterial,
+  SphereGeometry,
+  Vector3,
+  type Scene,
+} from "three"
 import { ballFromWire, type ServerEvent } from "../../protocol/messages.ts"
 import { writeBallPosition, type Cannonball } from "../../sim/gunnery.ts"
 import { tuning } from "../../sim/tuning.ts"
@@ -20,6 +32,45 @@ export interface BallMoments {
 const capacity = 256
 /** Drawn radius, metres: about twice a 24-pounder's, so the ball reads at a few hundred metres. */
 const radius = 0.3
+/** Beyond this distance, metres, a ball and its trail are drawn larger in proportion, so they keep their size on screen. */
+const readableDistance = 110
+const maxReadableScale = 3.5
+/** The smoke streak behind a ball: its length is this many seconds of flight, its head half-width metres. */
+const trailSeconds = 0.16
+const trailWidth = 0.55
+const trailSegments = 6
+
+/**
+ * Two crossed ribbons along +z (0 at the ball, 1 at the tail), widening as they go, with RGBA vertex colours: a faint
+ * warm glow at the head fading into grey smoke, soft at the edges. Scaled per ball by its speed.
+ */
+const trailGeometry = () => {
+  const position: Array<number> = []
+  const color: Array<number> = []
+  const index: Array<number> = []
+  for (const plane of [0, 1]) {
+    const base = position.length / 3
+    for (let s = 0; s <= trailSegments; s++) {
+      const t = s / trailSegments
+      const half = 0.5 + 1.1 * t
+      const alpha = (1 - t) ** 1.6 * 0.45
+      const heat = Math.max(0, 1 - t * 6)
+      for (const across of [-1, 0, 1]) {
+        position.push(plane === 0 ? across * half : 0, plane === 1 ? across * half : 0, t)
+        color.push(0.34 + 0.8 * heat, 0.33 + 0.3 * heat, 0.32, across === 0 ? alpha : 0)
+      }
+      if (s < trailSegments) {
+        const a = base + s * 3
+        index.push(a, a + 3, a + 1, a + 1, a + 3, a + 4, a + 1, a + 4, a + 2, a + 2, a + 4, a + 5)
+      }
+    }
+  }
+  const geometry = new BufferGeometry()
+  geometry.setAttribute("position", new Float32BufferAttribute(position, 3))
+  geometry.setAttribute("color", new Float32BufferAttribute(color, 4))
+  geometry.setIndex(index)
+  return geometry
+}
 
 interface Flight {
   ball: Cannonball | undefined
@@ -33,10 +84,15 @@ interface Flight {
  */
 export class Cannonballs {
   readonly mesh: InstancedMesh
+  /** The smoke streak behind each drawn ball, instance for instance with `mesh`. */
+  readonly trails: InstancedMesh
   readonly #moments: BallMoments
   readonly #flights: Array<Flight> = Array.from({ length: capacity }, () => ({ ball: undefined, launched: false, end: undefined }))
   readonly #matrix = new Matrix4()
   readonly #at = { x: 0, y: 0, z: 0 }
+  readonly #back = new Vector3()
+  readonly #side = new Vector3()
+  readonly #up = new Vector3()
   #count = 0
 
   constructor(scene: Scene, moments: BallMoments) {
@@ -46,6 +102,11 @@ export class Cannonballs {
     this.mesh.count = 0
     this.mesh.frustumCulled = false
     scene.add(this.mesh)
+    this.trails = new InstancedMesh(trailGeometry(), new MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, side: DoubleSide }), capacity)
+    this.trails.instanceMatrix.setUsage(DynamicDrawUsage)
+    this.trails.count = 0
+    this.trails.frustumCulled = false
+    scene.add(this.trails)
   }
 
   /** Balls fired and not yet ended at the render time. */
@@ -87,8 +148,8 @@ export class Cannonballs {
     this.#moments.ended(event, undefined)
   }
 
-  /** Plays the moments the render clock passed and draws the balls at `renderTime`. */
-  update(renderTime: number): void {
+  /** Plays the moments the render clock passed and draws the balls at `renderTime`, seen from `eye`. */
+  update(renderTime: number, eye: Vector3): void {
     let drawn = 0
     for (let i = 0; i < this.#count; ) {
       const flight = this.#flights[i]
@@ -108,13 +169,38 @@ export class Cannonballs {
         this.#remove(i)
         continue
       }
-      writeBallPosition(ball, renderTime, this.#at)
-      this.#moments.flying(ball, this.#at.x, this.#at.y, this.#at.z)
-      this.mesh.setMatrixAt(drawn++, this.#matrix.makeTranslation(this.#at.x, this.#at.y, this.#at.z))
+      const at = this.#at
+      writeBallPosition(ball, renderTime, at)
+      this.#moments.flying(ball, at.x, at.y, at.z)
+      const scale = Math.min(maxReadableScale, Math.max(1, Math.hypot(at.x - eye.x, at.y - eye.y, at.z - eye.z) / readableDistance))
+      this.mesh.setMatrixAt(drawn, this.#matrix.makeScale(scale, scale, scale).setPosition(at.x, at.y, at.z))
+      this.#placeTrail(drawn++, ball, renderTime, scale)
       i++
     }
     this.mesh.count = drawn
     this.mesh.instanceMatrix.needsUpdate = true
+    this.trails.count = drawn
+    this.trails.instanceMatrix.needsUpdate = true
+  }
+
+  /** Lays trail `instance` back along the flight from the ball just drawn, no longer than the ball has flown. */
+  #placeTrail(instance: number, ball: Cannonball, renderTime: number, scale: number) {
+    const at = this.#at
+    const hx = at.x
+    const hy = at.y
+    const hz = at.z
+    writeBallPosition(ball, Math.max(ball.firedAt, renderTime - trailSeconds), at)
+    const tail = this.#back.set(at.x - hx, at.y - hy, at.z - hz)
+    const length = tail.length()
+    if (length > 1e-4) tail.divideScalar(length)
+    else tail.set(0, 0, 1)
+    const side = this.#side.set(-tail.z, 0, tail.x)
+    if (side.lengthSq() < 1e-8) side.set(1, 0, 0)
+    side.normalize()
+    const up = this.#up.crossVectors(tail, side)
+    const w = trailWidth * scale
+    this.#matrix.makeBasis(side.multiplyScalar(w), up.multiplyScalar(w), tail.multiplyScalar(length)).setPosition(hx, hy, hz)
+    this.trails.setMatrixAt(instance, this.#matrix)
   }
 
   #remove(i: number) {
