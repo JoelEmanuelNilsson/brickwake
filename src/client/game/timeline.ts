@@ -24,7 +24,7 @@ export class ShipPose {
   reloadPort = 0
   reloadStarboard = 0
   life: ShipSnapshot["life"]["_tag"] = "afloat"
-  /** Sim time the ship started sinking (while `sinking`), or respawns (while `sunk`). */
+  /** Sim time the ship started sinking (while `sinking`). */
   lifeTime = 0
   spawn = 0
   kills = 0
@@ -156,7 +156,7 @@ const write = (out: ShipPose, a: ShipSnapshot, b: ShipSnapshot, u: number) => {
   out.reloadPort = b.reloadedAt[0]
   out.reloadStarboard = b.reloadedAt[1]
   out.life = b.life._tag
-  out.lifeTime = b.life._tag === "sinking" ? b.life.since : b.life._tag === "sunk" ? b.life.respawnAt : 0
+  out.lifeTime = b.life._tag === "sinking" ? b.life.since : 0
   out.spawn = b.spawn
   out.kills = b.kills
   out.deaths = b.deaths

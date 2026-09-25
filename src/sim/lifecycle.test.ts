@@ -3,10 +3,12 @@ import { addShip, createMatch, stepMatch, type BroadsideOrders, type MatchEvent,
 import { sampleOcean, seas } from "./ocean.ts"
 import { ffaRules } from "./rules.ts"
 import { duelShipIds, scenarios } from "./scenarios.ts"
-import { shipAttitude, shipId, shipPointToWorld, type ShipId, type ShipState } from "./ship.ts"
+import { defaultHull } from "./hull.ts"
+import { shipAttitude, shipId, shipPointToWorld, stepShip, type ShipId, type ShipState } from "./ship.ts"
 import { SIM_DT, SIM_HZ, tuning } from "./tuning.ts"
 import { quatFromAxisAngle, vec3 } from "./vector.ts"
 import { makeWind } from "./wind.ts"
+import { shipFlooding } from "./wreck.ts"
 
 const [a, b] = duelShipIds
 
@@ -48,7 +50,7 @@ const sinkB = (start: MatchState) => {
 
 const hullCorners = [-14, 14].flatMap((x) => [-4, 4].flatMap((z) => [vec3(x, 5, z), vec3(x, -2, z)]))
 
-test("a ship at 0 HP founders by the end the killing ball struck and goes under within the sinking time", () => {
+test("a ship at 0 HP founders by the end the killing ball struck; the hulk it leaves at respawn goes under within the sinking time", () => {
   const { state, events } = sinkB(scenarios.duel)
   const sunk = events.find((event) => event._tag === "shipSunk")
   expect(sunk).toMatchObject({ shipId: b, by: a })
@@ -61,27 +63,34 @@ test("a ship at 0 HP founders by the end the killing ball struck and goes under 
 
   const pitches: Array<number> = []
   let after = state
-  for (let t = 0; t < tuning.sinking.seconds; t += SIM_DT) {
-    after = stepMatch(after, new Map([[b, { rudder: 1, sail: 2 }]])).state
-    pitches.push(shipAttitude(ship(after, b)).pitch)
+  let hulk: ShipState | undefined
+  while (hulk === undefined) {
+    const step = stepMatch(after, new Map([[b, { rudder: 1, sail: 2 }]]))
+    after = step.state
+    const respawned = step.events.find((event) => event._tag === "shipRespawned")
+    if (respawned?._tag === "shipRespawned") hulk = respawned.hulk
+    else pitches.push(shipAttitude(ship(after, b)).pitch)
+  }
+  let time = after.tick * SIM_DT
+  expect(time).toBeCloseTo(life.since + tuning.sinking.respawnSeconds, 1)
+  expect(hulk.controls).toEqual({ rudder: 0, sail: 0 })
+  const flooding = shipFlooding(hulk.removedParts)
+  for (; time < life.since + tuning.sinking.seconds + 0.5; time += SIM_DT) {
+    hulk = stepShip(hulk, { sea: after.sea, wind: after.wind, time }, defaultHull, flooding)
+    pitches.push(shipAttitude(hulk).pitch)
   }
   // Bow down is negative pitch: the flooding end goes first.
   const settle = Math.max(...pitches.map((pitch) => -life.floodEnd * pitch)) * (180 / Math.PI)
   expect(settle).toBeGreaterThan(20)
-  expect(ship(after, b).controls).toEqual({ rudder: 0, sail: 0 })
-  after = run(after, 0.5).state
-  const b2 = ship(after, b)
-  expect(b2.life._tag).toBe("sunk")
-  const time = after.tick * SIM_DT
   for (const corner of hullCorners) {
-    const world = shipPointToWorld(b2, corner)
+    const world = shipPointToWorld(hulk, corner)
     expect(world.y).toBeLessThan(sampleOcean(after.sea, world.x, world.z, time).height)
   }
 })
 
 test("a sinking ship takes no damage and no orders; its hull still stops balls", () => {
   const { state } = sinkB(scenarios.duel)
-  const { events } = run(state, 3, (s) => new Map([...aTargetsB(s), [b, { side: "port", aimPoint: vec3(0, 0, 0) }]]))
+  const { events } = run(state, 2.5, (s) => new Map([...aTargetsB(s), [b, { side: "port", aimPoint: vec3(0, 0, 0) }]]))
   const hits = events.filter((event) => event._tag === "ballHit" && event.target === b)
   expect(hits.length).toBeGreaterThan(0)
   for (const hit of hits) expect(hit).toMatchObject({ damage: 0, hp: 0 })
@@ -89,15 +98,16 @@ test("a sinking ship takes no damage and no orders; its hull still stops balls",
   expect(events.filter((event) => event._tag === "cannonFired" && event.ball.shooter === b)).toEqual([])
 })
 
-test("a sunk ship respawns on the spawn ring at full HP after the respawn wait, keeping its score", () => {
+test("a sunk ship respawns on the spawn ring at full HP after the respawn wait, keeping its score and leaving its hulk", () => {
   const sunk = sinkB(scenarios.duel)
   const since = sunk.events.find((event) => event._tag === "shipSunk")!.time
-  const respawnAt = since + tuning.sinking.seconds + tuning.sinking.respawnSeconds
+  const respawnAt = since + tuning.sinking.respawnSeconds
   const before = run(sunk.state, respawnAt - sunk.state.tick * SIM_DT - 0.1)
-  expect(ship(before.state, b).life).toEqual({ _tag: "sunk", respawnAt })
+  expect(ship(before.state, b).life).toMatchObject({ _tag: "sinking", since })
   const after = run(before.state, 0.2)
   const back = ship(after.state, b)
-  expect(after.events).toContainEqual(expect.objectContaining({ _tag: "shipRespawned", shipId: b }))
+  const respawned = after.events.find((event) => event._tag === "shipRespawned")
+  expect(respawned).toMatchObject({ shipId: b, hulk: { id: b, hp: 0, life: { _tag: "sinking", since }, removedParts: ship(before.state, b).removedParts } })
   expect(back).toMatchObject({ life: { _tag: "afloat" }, hp: tuning.damage.hullHp, spawn: 2, deaths: 1, kills: 0 })
   expect(Math.hypot(back.position.x, back.position.z)).toBeCloseTo(tuning.match.spawnRing.radius, 0)
   expect(back.position.y).toBeGreaterThan(-1)

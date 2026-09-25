@@ -18,7 +18,7 @@ test("a welcome's list plus later hits give the server's parts gone; a respawn s
   const server = shipWreck([10, 11, mast])
   const gone = Array.from({ length: graph.count }, (_, i) => i).filter((i) => !server.isPresent(i))
   expect([...(first?.gone ?? [])].sort((a, b) => a - b)).toEqual(gone)
-  wrecks.onEvent({ _tag: "shipRespawned", tick: 2, shipId: dummy })
+  wrecks.onEvent({ _tag: "shipRespawned", tick: 2, shipId: dummy, hulk: null })
   expect(wrecks.of(dummy)).toBeUndefined()
 })
 

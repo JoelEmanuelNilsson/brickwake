@@ -113,8 +113,11 @@ export type MatchEvent =
   | { readonly _tag: "ballSplash"; readonly tick: number; readonly time: number; readonly ballId: BallId; readonly point: Vec3 }
   /** A ship's HP reached 0 at `time`; it founders. `by` is the ship whose ball did it. */
   | { readonly _tag: "shipSunk"; readonly tick: number; readonly time: number; readonly shipId: ShipId; readonly by: ShipId | undefined }
-  /** A ship re-entered the match on the spawn ring: after sinking, or at a restart. */
-  | { readonly _tag: "shipRespawned"; readonly tick: number; readonly shipId: ShipId }
+  /**
+   * A ship re-entered the match on the spawn ring: after sinking, or at a restart. `hulk` is the hull it left sinking,
+   * at the end of the tick, for clients to sink on their own; undefined when the ship was afloat.
+   */
+  | { readonly _tag: "shipRespawned"; readonly tick: number; readonly shipId: ShipId; readonly hulk: ShipState | undefined }
   /** A ship afloat was made whole in place (full HP, no parts missing) as play began. */
   | { readonly _tag: "shipRepaired"; readonly tick: number; readonly shipId: ShipId }
   /**
@@ -244,7 +247,6 @@ const gunsBySide = {
 
 const isAfloat = (ship: ShipState) => ship.life._tag === "afloat"
 const unscored = { kills: 0, deaths: 0, shots: 0, hits: 0, damage: 0 } as const
-const isAbove = (ship: ShipState) => ship.life._tag !== "sunk"
 
 /**
  * A sinker's reward: `sinkRepair` of full HP back, and the same share of its missing HP's parts rebuilt, so the
@@ -268,9 +270,9 @@ const respawnTeam = (ships: ReadonlyArray<ShipState>, ship: ShipState): ShipStat
   return own - ships.filter((s) => s.team === other).length >= 2 ? other : ship.team
 }
 
-/** The ship back on the spawn ring at `time`, clear of every ship still above water, keeping its side and score. */
+/** The ship back on the spawn ring at `time`, clear of every other ship, keeping its side and score. */
 const respawn = (state: MatchState, ships: ReadonlyArray<ShipState>, ship: ShipState, time: number): ShipState => {
-  const clear = ships.filter((other) => other.id !== ship.id && isAbove(other))
+  const clear = ships.filter((other) => other.id !== ship.id)
   const fresh = makeShip(spawnPoint({ ...state, ships: clear }, ship.id, respawnTeam(ships, ship)), state.sea, time)
   const { kills, deaths, shots, hits, damage } = ship
   return { ...fresh, spawn: ship.spawn + 1, kills, deaths, shots, hits, damage }
@@ -279,7 +281,7 @@ const respawn = (state: MatchState, ships: ReadonlyArray<ShipState>, ship: ShipS
 /**
  * Advances a match by one fixed 30 Hz tick (`SIM_DT`). Pure. Order: bots decide, helm and sail inputs, broadside orders, guns
  * due in the ripple fire (with recoil), ships move and push apart, balls fly and hit or splash, sinks score, sinking
- * ships go under and sunk ones respawn, the match phase advances, wind.
+ * ships respawn and leave their hulks, the match phase advances, wind.
  */
 export const stepMatch = (
   state: MatchState,
@@ -335,12 +337,8 @@ export const stepMatch = (
   pending = pending.filter((shot) => shot.at >= end)
 
   const env = { sea: state.sea, wind: state.wind, time: start }
-  // Sunk hulls keep falling through the water until they respawn, so a ship never stops mid-plunge on screen.
-  let moved = collideShips(
-    // Holes flood a hull afloat or foundering, so a ship does not bob up when it starts to sink; a sunk one has no buoyancy left.
-    ships.map((ship) => stepShip(ship, env, defaultHull, ship.life._tag !== "sunk" ? shipFlooding(ship.removedParts) : undefined)),
-    isAbove,
-  )
+  // Holes flood a hull afloat or foundering, so a ship does not bob up when it starts to sink.
+  let moved = collideShips(ships.map((ship) => stepShip(ship, env, defaultHull, shipFlooding(ship.removedParts))))
   // Scores a sink in play and repairs the credited sinker afloat; the repair's event follows the sink's.
   const creditSink = (victim: ShipId, by: ShipId | undefined, time: number): ReadonlyArray<MatchEvent> => {
     const sunk: MatchEvent = { _tag: "shipSunk", tick: state.tick, time, shipId: victim, by }
@@ -368,7 +366,7 @@ export const stepMatch = (
       hit !== undefined && start - hit.time <= tuning.sinking.capsizeCreditSeconds && moved.some((other) => other.id === hit.shipId) ? hit.shipId : undefined
     events.push(...creditSink(ship.id, by, start))
   }
-  // A foundering hull still stops balls (they break bricks for no HP); a sunk one is under the sea.
+  // A foundering hull still stops balls: they break bricks for no HP.
   const flying: Array<Cannonball> = []
   const friendly = (ball: Cannonball, target: ShipState) => {
     const shooter = moved.find((ship) => ship.id === ball.shooter)
@@ -398,7 +396,7 @@ export const stepMatch = (
   }
   for (const ball of balls) {
     // Pairs are rebuilt per ball: an earlier ball this tick may have holed a hull this one flies through.
-    const pairs = ships.flatMap((ship, index) => (isAbove(ship) ? [[ship, moved[index]!] as const] : []))
+    const pairs = ships.map((ship, index) => [ship, moved[index]!] as const)
     const trace = traceBall({ ball, sea: state.sea, from: Math.max(start, ball.firedAt), to: end, ships: pairs, tickStart: start })
     for (const sail of trace.sails) {
       const index = moved.findIndex((ship) => ship.id === sail.target)
@@ -438,17 +436,11 @@ export const stepMatch = (
     events.push(...sunk)
   }
 
-  const { seconds: sinkSeconds, respawnSeconds } = tuning.sinking
-  moved = moved.map((ship) =>
-    ship.life._tag === "sinking" && end >= ship.life.since + sinkSeconds
-      ? { ...ship, life: { _tag: "sunk", respawnAt: ship.life.since + sinkSeconds + respawnSeconds } }
-      : ship,
-  )
   for (let index = 0; index < moved.length; index++) {
     const ship = moved[index]!
-    if (ship.life._tag !== "sunk" || end < ship.life.respawnAt) continue
+    if (ship.life._tag !== "sinking" || end < ship.life.since + tuning.sinking.respawnSeconds) continue
     moved = moved.with(index, respawn(state, moved, ship, end))
-    events.push({ _tag: "shipRespawned", tick: state.tick, shipId: ship.id })
+    events.push({ _tag: "shipRespawned", tick: state.tick, shipId: ship.id, hulk: ship })
   }
 
   let phase = state.phase
@@ -474,7 +466,7 @@ export const stepMatch = (
       const placed: Array<ShipState> = []
       for (const ship of moved) {
         placed.push({ ...respawn(state, placed, ship, end), ...unscored })
-        events.push({ _tag: "shipRespawned", tick: state.tick, shipId: ship.id })
+        events.push({ _tag: "shipRespawned", tick: state.tick, shipId: ship.id, hulk: isAfloat(ship) ? undefined : ship })
       }
       moved = placed
       teamSinks = noTeamSinks

@@ -121,11 +121,11 @@ test("with no bots to even the sides, a ship respawning on a side two ships larg
   expect(sides(state)).toEqual({ pirates: 4, navy: 2 })
   const pirate = state.ships.find((ship) => ship.team === "pirates")!
   const time = state.tick / SIM_HZ
-  state = { ...state, ships: state.ships.map((ship) => (ship.id === pirate.id ? { ...ship, life: { _tag: "sunk", respawnAt: time } } : ship)) }
+  state = { ...state, ships: state.ships.map((ship) => (ship.id === pirate.id ? { ...ship, life: { _tag: "sinking", since: time - tuning.sinking.respawnSeconds, floodEnd: 1, floodSide: 1 } } : ship)) }
   const respawned = stepMatch(state, new Map()).state
   expect(shipOf(respawned, pirate.id).team).toBe("navy")
   expect(sides(respawned)).toEqual({ pirates: 3, navy: 3 })
   expect(shipOf(respawned, pirate.id).position.z).toBeLessThan(1e-6)
-  const again = stepMatch({ ...respawned, ships: respawned.ships.map((ship) => (ship.id === pirate.id ? { ...ship, life: { _tag: "sunk", respawnAt: time } } : ship)) }, new Map()).state
+  const again = stepMatch({ ...respawned, ships: respawned.ships.map((ship) => (ship.id === pirate.id ? { ...ship, life: { _tag: "sinking", since: time - tuning.sinking.respawnSeconds, floodEnd: 1, floodSide: 1 } } : ship)) }, new Map()).state
   expect(shipOf(again, pirate.id).team).toBe("navy")
 })

@@ -1,10 +1,11 @@
 import { ACESFilmicToneMapping, Color, DirectionalLight, FogExp2, HemisphereLight, LinearSRGBColorSpace, PCFShadowMap, PerspectiveCamera, Quaternion, Scene, Vector2, Vector3, WebGLRenderer } from "three"
 import type { ScenarioName } from "../../sim/scenarios.ts"
-import type { ClientMessage, MatchPhaseSnapshot, ServerEvent, ServerMessage, WindSnapshot } from "../../protocol/messages.ts"
+import { hulkFromWire, type ClientMessage, type MatchPhaseSnapshot, type ServerEvent, type ServerMessage, type WindSnapshot } from "../../protocol/messages.ts"
 import { ballVelocityAt, segmentBoxEntry } from "../../sim/gunnery.ts"
 import { galleonClass, shipWreck } from "../../sim/wreck.ts"
 import { ffaRules, type MatchMode } from "../../sim/rules.ts"
-import { tuning } from "../../sim/tuning.ts"
+import type { ShipState } from "../../sim/ship.ts"
+import { SIM_DT, tuning } from "../../sim/tuning.ts"
 import { GameAudio } from "../audio/game-audio.ts"
 import { BrickDebris } from "./brick-debris.ts"
 import { ChaseCamera } from "./chase-camera.ts"
@@ -25,7 +26,8 @@ import { OceanSurface } from "./ocean.ts"
 import { Reticle } from "./reticle.ts"
 import { RenderPipeline } from "./render-pipeline.ts"
 import { ShipView } from "./ship-view.ts"
-import { Wrecks } from "./wrecks.ts"
+import { Hulks } from "./hulks.ts"
+import { Wrecks, type Wreck } from "./wrecks.ts"
 import { SinkingShips } from "./sinking.ts"
 import { createGameSky, type GameSky } from "./sky.ts"
 import { EventQueue, type ShipPose, SnapshotTimeline } from "./timeline.ts"
@@ -69,7 +71,7 @@ export const modeKey = "brickwake.mode"
 
 /** A ship in play: its pooled view, the frame it was last seen, and the team its sails were printed for. */
 interface ShipEntry {
-  readonly view: ShipView
+  view: ShipView
   seen: number
   livery: { readonly team: ShipPose["team"]; readonly name: string } | undefined
 }
@@ -114,10 +116,13 @@ export class Game {
   readonly #appliedEvents: Array<ServerEvent> = []
   readonly #sweep = (entry: ShipEntry, id: string) => {
     if (entry.seen === this.#frameCount) return
-    this.scene.remove(entry.view.group)
-    this.#debris.forget(entry.view)
-    this.#spareViews.push(entry.view)
+    this.#releaseView(entry.view)
     this.#ships.delete(id)
+  }
+  readonly #releaseView = (view: ShipView) => {
+    this.scene.remove(view.group)
+    this.#debris.forget(view)
+    this.#spareViews.push(view)
   }
   readonly #applyEvent = (event: ServerEvent) => {
     this.#appliedEvents.push(event)
@@ -130,6 +135,9 @@ export class Game {
   readonly #matchHud: MatchHud
   readonly #hitIndicator: HitIndicator
   readonly #sinking: SinkingShips
+  readonly #hulks: Hulks
+  /** Hulks respawned ships left, from their `shipRespawned` until the ship's new life is drawn, with the damage drawn on them. */
+  readonly #hulksDue = new Map<string, { readonly hulk: ShipState; readonly time: number; readonly wreck: Wreck | undefined }>()
   readonly #debris: BrickDebris
   /** Hits that broke bricks this frame, thrown as debris once the ships are posed. */
   readonly #strikes: Array<{ readonly hit: Extract<ServerEvent, { readonly _tag: "ballHit" }>; readonly detached: ReadonlyArray<number> }> = []
@@ -285,6 +293,7 @@ export class Game {
       hullAlong: this.#hullAlong,
     })
     this.#sinking = new SinkingShips(this.effects, this.audio, this.#debris, this.#galleon)
+    this.#hulks = new Hulks(this.#sinking, this.#releaseView)
     this.#wrecks.onStrike = (hit, detached) => this.#strikes.push({ hit, detached })
     this.eventHandlers.push((event) => this.#gunnery.onEvent(event))
     this.eventHandlers.push((event) => this.#onMatchEvent(event))
@@ -383,6 +392,14 @@ export class Game {
     this.renderer.setAnimationLoop((ms) => this.#renderFrame(ms))
   }
 
+  #newEntry(id: string): ShipEntry {
+    const entry: ShipEntry = { view: this.#spareViews.pop() ?? new ShipView(id, this.#galleon), seen: 0, livery: undefined }
+    entry.view.group.name = `ship ${id}`
+    this.#ships.set(id, entry)
+    this.scene.add(entry.view.group)
+    return entry
+  }
+
   #status(text: string) {
     this.elements.status.dataset.state = text
     this.elements.overlay.dataset.state = text
@@ -470,6 +487,8 @@ export class Game {
         this.#events = new EventQueue<ServerEvent>()
         this.#gunnery.joined()
         this.#wrecks.load(message.wrecks)
+        this.#hulks.clear()
+        this.#hulksDue.clear()
         if (this.#ocean !== undefined) this.scene.remove(this.#ocean.mesh)
         this.#ocean = new OceanSurface(message.sea, { sky: this.#sky.cube, sun: sunColor, sunDirection, flashColor }, wakePeriod)
         this.scene.add(this.#ocean.mesh)
@@ -508,6 +527,10 @@ export class Game {
   #onMatchEvent(event: ServerEvent) {
     this.#matchHud.onEvent(event)
     if (event._tag === "shipRespawned" && event.shipId === this.#shipId) this.#controls?.syncSail(0)
+    // Runs before `Wrecks` forgets the damage, so the hulk keeps what was shot off it.
+    if (event._tag === "shipRespawned" && event.hulk !== null)
+      this.#hulksDue.set(event.shipId, { hulk: hulkFromWire(event.shipId, event.hulk), time: (event.tick + 1) * SIM_DT, wreck: this.#wrecks.of(event.shipId) })
+    if (event._tag === "shipLeft") this.#hulksDue.delete(event.shipId)
     if (event._tag === "sailHit") this.#ships.get(event.target)?.view.punchSail(...event.localPoint)
     if (event._tag !== "ballHit" || event.target !== this.#shipId) return
     const own = this.#ships.get(event.target)?.view.pose
@@ -596,16 +619,30 @@ export class Game {
       const id = ships[i]?.id
       if (id === undefined) continue
       let entry = this.#ships.get(id)
+      const fresh = entry === undefined
       if (entry === undefined) {
-        entry = { view: this.#spareViews.pop() ?? new ShipView(id, this.#galleon), seen: 0, livery: undefined }
-        entry.view.group.name = `ship ${id}`
-        this.#ships.set(id, entry)
-        this.scene.add(entry.view.group)
+        entry = this.#newEntry(id)
+        this.#hulksDue.delete(id)
       }
       entry.seen = this.#frameCount
-      entry.view.showWreck(this.#wrecks.of(id))
-      const pose = entry.view.pose
+      let pose = entry.view.pose
+      const spawn = pose.spawn
       if (timeline.sample(id, pose)) {
+        if (!fresh && pose.spawn !== spawn) {
+          const due = this.#hulksDue.get(id)
+          if (due !== undefined) {
+            // The ship's new life is drawn from here: its old view sinks on as a hulk, and the ship takes a fresh one.
+            this.#hulksDue.delete(id)
+            this.#hulks.add(id, entry.view, due.hulk, due.time)
+            entry = this.#newEntry(id)
+            entry.seen = this.#frameCount
+            pose = entry.view.pose
+            timeline.sample(id, pose)
+          }
+          if (id === this.#shipId) camera.placeBehind(Math.atan2(-2 * (pose.qx * pose.qz - pose.qw * pose.qy), 1 - 2 * (pose.qy * pose.qy + pose.qz * pose.qz)))
+        }
+        // Until the hulk takes the view, it keeps the damage the ship's old life left.
+        entry.view.showWreck(this.#hulksDue.get(id)?.wreck ?? this.#wrecks.of(id))
         const livery = entry.livery
         if (livery === undefined || livery.team !== pose.team) {
           const print = shipLivery(id, pose.team)
@@ -623,6 +660,7 @@ export class Game {
       }
     }
     this.#ships.forEach(this.#sweep)
+    this.#hulks.update(dt, renderTime, ocean.sea, this.#wind, camera, viewportHeight)
     for (const { hit, detached } of this.#strikes) {
       const view = this.#ships.get(hit.target)?.view
       const ball = this.#gunnery.balls.find(hit.ballId)

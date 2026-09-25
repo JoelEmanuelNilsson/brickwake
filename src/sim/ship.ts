@@ -44,12 +44,11 @@ export interface ShipControls {
 
 /**
  * Where a ship is in its life. `sinking`: the hull settles and lists toward `floodSide` (+1 starboard, −1 port), then
- * buoyancy fades from the `floodEnd` (+1 bow, −1 stern) aft or forward; the ship takes no orders and cannot be hit. `sunk`: under water, out of play until `respawnAt` (sim seconds).
+ * buoyancy fades from the `floodEnd` (+1 bow, −1 stern) aft or forward; the ship takes no orders and cannot be hit. It respawns `tuning.sinking.respawnSeconds` after `since`.
  */
 export type ShipLife =
   | { readonly _tag: "afloat" }
   | { readonly _tag: "sinking"; readonly since: number; readonly floodEnd: 1 | -1; readonly floodSide: 1 | -1 }
-  | { readonly _tag: "sunk"; readonly respawnAt: number }
 
 const afloat: ShipLife = { _tag: "afloat" }
 const intact: ReadonlyArray<number> = []
@@ -161,7 +160,6 @@ export const makeShip = (
  */
 export const buoyancyKept = (life: ShipLife, x: number, z: number, time: number): number => {
   if (life._tag === "afloat") return 1
-  if (life._tag === "sunk") return 0
   const { settleSeconds, settleLoss, plungeAt, floodSeconds, floodSpread } = tuning.sinking
   const clamp = (v: number) => Math.max(0, Math.min(1, v))
   const t = time - life.since

@@ -14,7 +14,7 @@ import type { ShipPose } from "./timeline.ts"
 const founderHz = 14
 /** Ship-local deck points the smoke and churn come from, bow to stern. */
 const deckPoints = [-11, -6, -1, 4, 9].map((x) => new Vector3(x, 2.6, 0))
-/** Seconds after going under that a sunk hull stops being drawn: the sea hides it well before. */
+/** Seconds after `tuning.sinking.seconds` that a hulk stops being drawn: the sea hides it well before. */
 const drawnSunkSeconds = 1.5
 const { plungeAt } = tuning.sinking
 /** Seconds into the sinking a mast may crack, each with `crackChance`; it gives way `toppleDelay` seconds later. */
@@ -48,7 +48,6 @@ interface Foundering {
   clock: number
   plunged: boolean
   plungedAt: number
-  life: ShipPose["life"]
   cracks: number
   bursts: number
   afterBursts: number
@@ -100,7 +99,7 @@ export class SinkingShips {
   update(id: string, view: ShipView, dt: number, renderTime: number, sea: SeaState, camera: ChaseCamera): boolean {
     const pose = view.pose
     this.#q.set(pose.qx, pose.qy, pose.qz, pose.qw)
-    if (pose.life !== "sunk") this.#smoke(id, view, dt, renderTime, sea)
+    this.#smoke(id, view, dt, renderTime, sea)
     if (pose.life === "afloat") {
       this.#foundering.delete(id)
       return true
@@ -111,7 +110,6 @@ export class SinkingShips {
         clock: 0,
         plunged: false,
         plungedAt: 0,
-        life: pose.life,
         cracks: 0,
         bursts: 0,
         afterBursts: 0,
@@ -125,10 +123,10 @@ export class SinkingShips {
         plunge: new Vector3(),
       }
       this.#foundering.set(id, f)
-      if (pose.life === "sinking") this.#breach(pose, camera)
+      this.#breach(pose, camera)
     }
-    f.life = pose.life
-    const since = pose.life === "sinking" ? renderTime - pose.lifeTime : renderTime - (pose.lifeTime - tuning.sinking.respawnSeconds) + tuning.sinking.seconds
+    const since = renderTime - pose.lifeTime
+    const drawn = since < tuning.sinking.seconds + drawnSunkSeconds
     // The low side: where the starboard axis points down, over it; debris goes that way.
     this.#side.set(0, 0, 1).applyQuaternion(this.#q)
     const lowSign = this.#side.y < 0 ? 1 : -1
@@ -164,7 +162,7 @@ export class SinkingShips {
         this.#audio.splash(f.plunge.x, water, f.plunge.z, 40)
       }
     }
-    if (f.plunged) return pose.life === "sinking" || since < tuning.sinking.seconds + drawnSunkSeconds
+    if (f.plunged) return drawn
 
     // How far the flood has got: 0 as it starts to settle, 1 as the plunge begins.
     const flood = Math.min(1, since / plungeAt)
@@ -222,7 +220,23 @@ export class SinkingShips {
       f.floatClock += 1 / floatHz
       this.#floatFree(view, pose, lowSign, sea, renderTime)
     }
-    return true
+    return drawn
+  }
+
+  /** Ship `id`'s foundering carries on as hulk `key`: the ship respawned and left its drawn hull behind. */
+  handOff(id: string, key: string): void {
+    const f = this.#foundering.get(id)
+    if (f !== undefined) this.#foundering.set(key, f)
+    const s = this.#smoulder.get(id)
+    if (s !== undefined) this.#smoulder.set(key, s)
+    this.#foundering.delete(id)
+    this.#smoulder.delete(id)
+  }
+
+  /** Drops what is kept for `key`, a hulk no longer drawn. */
+  forget(key: string): void {
+    this.#foundering.delete(key)
+    this.#smoulder.delete(key)
   }
 
   /** A ship below `smokeBelow` of its HP smokes from a few of its holes above the water, and burns when close to sinking. */

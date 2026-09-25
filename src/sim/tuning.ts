@@ -182,14 +182,14 @@ export const tuning = {
     flooding: { height: 0.5, perPart: 0.055, maxPerColumn: 0.7 },
   },
   sinking: {
-    /** Seconds from HP 0 until the ship is under and out of play; it takes no orders and cannot be hit meanwhile. */
+    /** Seconds from HP 0 until the hull is under: clients sink the hulk a respawned ship leaves for the rest of it. */
     seconds: 12,
     /** Heel or pitch past which a ship capsizes and founders, radians. */
     capsizeHeel: 75 * degrees,
     /** A capsize this soon after an enemy ball took HP is that enemy's sink, seconds: the broadside that knocked the ship down wins it. */
     capsizeCreditSeconds: 20,
-    /** Seconds a sunk ship waits before it respawns. */
-    respawnSeconds: 5,
+    /** Seconds from HP 0 until the ship is back on the spawn ring; meanwhile it takes no orders and cannot be hit. */
+    respawnSeconds: 3,
     /**
      * First the hull settles over `settleSeconds`, each column losing `all` of its lift, plus up to `lowSide` on the
      * flood side and `floodEnd` at the flooding end, so it lists and trims before it goes.
