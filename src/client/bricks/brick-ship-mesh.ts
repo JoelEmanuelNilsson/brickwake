@@ -126,7 +126,8 @@ const scratchStud = new Matrix4()
 const scratchScale = new Matrix4()
 const scratchPosition = new Vector3()
 const linearColors = new Map<BrickColor, Color>()
-const linear = (color: BrickColor) => {
+/** The instance colour a part of `color` draws with: linear, finish flags on red. Shared; do not mutate. */
+export const brickColorLinear = (color: BrickColor): Color => {
   const cached = linearColors.get(color)
   if (cached !== undefined) return cached
   const { srgb, finish } = brickColors[color]
@@ -136,7 +137,7 @@ const linear = (color: BrickColor) => {
   linearColors.set(color, created)
   return created
 }
-const plugColor = linear("black")
+const plugColor = brickColorLinear("black")
 
 /** A fixed-capacity InstancedMesh whose slots are packed: removing one moves the last instance into it. */
 class InstancePool {
@@ -478,7 +479,7 @@ export class BrickShipMesh {
   private showPart(index: number, interior: boolean, upload: boolean) {
     const placement = this.placements[index]
     if (placement === undefined) return
-    this.near.add(index, placement.part, placement.matrix, linear(placement.color), upload)
+    this.near.add(index, placement.part, placement.matrix, brickColorLinear(placement.color), upload)
     this.addFlat(interior ? this.flatInner : this.flatOuter, index, upload)
   }
 
@@ -488,7 +489,7 @@ export class BrickShipMesh {
     if (placement === undefined || flat === undefined) return
     const [sx, sy, sz] = flat.scale
     scratchMatrix.multiplyMatrices(placement.matrix, scratchScale.makeScale(sx, sy, sz))
-    layer.add(index, flat.key, scratchMatrix, linear(placement.color), upload)
+    layer.add(index, flat.key, scratchMatrix, brickColorLinear(placement.color), upload)
   }
 
   private showStud(index: number, stud: number, upload: boolean) {
@@ -500,7 +501,7 @@ export class BrickShipMesh {
     scratchStud.makeTranslation(x * metresPerLdu, y * metresPerLdu, z * metresPerLdu)
     scratchMatrix.multiplyMatrices(placement.matrix, scratchStud)
     const key = (this.studStart[index] ?? 0) + stud
-    const color = linear(placement.color)
+    const color = brickColorLinear(placement.color)
     this.nearStuds.add(key, "studs", scratchMatrix, color, upload)
     this.midStuds.add(key, "studs", scratchMatrix, color, upload)
   }

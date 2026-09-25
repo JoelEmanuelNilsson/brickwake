@@ -6,7 +6,7 @@ import type { DamageGraph } from "../../sim/ship/damage.ts"
 import { gridMetres } from "../../sim/ship/generate.ts"
 import { rigLayout } from "../../sim/ship/rig.ts"
 import { galleonSpec } from "../../sim/ship/spec.ts"
-import { galleonClass } from "../../sim/wreck.ts"
+import { galleonClass, type SailPlane } from "../../sim/wreck.ts"
 import { type BrickLibrary, type BrickPlacement, type BrickPlug, createBrickLibrary } from "../bricks/brick-ship-mesh.ts"
 import { shipPlacements } from "../bricks/ship-placements.ts"
 import { buildRigGeometry, type RigGeometry } from "../rig/ship-rig.ts"
@@ -21,6 +21,35 @@ export interface PartSlot {
 export interface DrawnGun {
   readonly cannon: Vector3
   readonly muzzle: Vector3
+}
+
+/** One mast as the effects see it: where it stands and the parts that decide whether it is up. */
+export interface DrawnMast {
+  readonly x: number
+  readonly foot: number
+  readonly top: number
+  /** Its highest part: while present, the mast's flags and ropes are up. */
+  readonly topPart: number
+  /** Round bricks low and high on the mast where it snaps when a ship founders, bottom up. */
+  readonly snapParts: ReadonlyArray<number>
+}
+
+/** Height of the ship's upper surfaces (decks, castle roofs, rails) over a ship-local grid, for debris to land on. −∞ off the ship. */
+export interface DeckField {
+  readonly x0: number
+  readonly z0: number
+  readonly cell: number
+  readonly nx: number
+  readonly nz: number
+  readonly heights: Float32Array
+}
+
+/** The deck height at ship-local (x, z), −∞ off the ship. */
+export const deckHeight = (deck: DeckField, x: number, z: number): number => {
+  const i = Math.floor((x - deck.x0) / deck.cell)
+  const k = Math.floor((z - deck.z0) / deck.cell)
+  if (i < 0 || k < 0 || i >= deck.nx || k >= deck.nz) return Number.NEGATIVE_INFINITY
+  return deck.heights[k * deck.nx + i] ?? Number.NEGATIVE_INFINITY
 }
 
 /**
@@ -43,6 +72,15 @@ export interface GalleonModel {
   readonly guns: ReadonlyArray<DrawnGun>
   /** Ship part index → where it is drawn. */
   readonly slots: ReadonlyArray<PartSlot | undefined>
+  /** Ship part index → its placement, ship-local. */
+  readonly placements: ReadonlyArray<BrickPlacement>
+  /** Parts from this index on are the rig. */
+  readonly rigFrom: number
+  /** Masts in `RigLayout.masts` order. */
+  readonly masts: ReadonlyArray<DrawnMast>
+  /** The sim's sail planes, indexed like the rig's sails. */
+  readonly sails: ReadonlyArray<SailPlane>
+  readonly deck: DeckField
   /** The damage graph the server's sim uses, for deriving the parts that fall with removed ones. */
   readonly graph: DamageGraph
   /** Air around the intact ship; each view holes its own copy. */
@@ -65,7 +103,7 @@ const rudderCourses = [
 export const loadGalleon = (): GalleonModel => {
   const started = performance.now()
   const spec = galleonSpec
-  const { ship, graph } = galleonClass()
+  const { ship, graph, sails } = galleonClass()
   const built = shipPlacements(spec, ship)
   const layout = rigLayout(spec)
   const mastXs = layout.masts.map((mast) => mast.x)
@@ -130,7 +168,36 @@ export const loadGalleon = (): GalleonModel => {
     }
   })
 
+  const { boxes } = graph
+  const column = (x: number) => {
+    const parts: Array<number> = []
+    for (let i = ship.rigFrom; i < graph.count; i++) {
+      const o = i * 6
+      if (Math.abs((boxes[o]! + boxes[o + 3]!) / 2 - x) < 0.3 && Math.abs((boxes[o + 2]! + boxes[o + 5]!) / 2) < 0.3) parts.push(i)
+    }
+    return parts.sort((a, b) => boxes[a * 6 + 1]! - boxes[b * 6 + 1]!)
+  }
+  const masts = layout.masts.map((mast): DrawnMast => {
+    const parts = column(mast.x)
+    const round = parts.filter((i) => ship.parts[i]?.part === "3941")
+    const nearest = (y: number) => round.reduce((best, i) => (Math.abs(boxes[i * 6 + 1]! - y) < Math.abs(boxes[best * 6 + 1]! - y) ? i : best), round[0] ?? -1)
+    return { x: mast.x, foot: mast.foot, top: mast.top, topPart: parts[parts.length - 1] ?? -1, snapParts: [nearest(mast.foot + 2.4), nearest((mast.foot + mast.top) / 2)] }
+  })
+  const deck: DeckField = { x0: -15.2, z0: -6, cell: 0.2, nx: 156, nz: 60, heights: new Float32Array(156 * 60).fill(Number.NEGATIVE_INFINITY) }
+  for (let i = 0; i < ship.rigFrom; i++) {
+    const o = i * 6
+    const top = boxes[o + 4]!
+    for (let k = Math.max(0, Math.floor((boxes[o + 2]! - deck.z0) / deck.cell)); k < Math.min(deck.nz, Math.ceil((boxes[o + 5]! - deck.z0) / deck.cell)); k++)
+      for (let j = Math.max(0, Math.floor((boxes[o]! - deck.x0) / deck.cell)); j < Math.min(deck.nx, Math.ceil((boxes[o + 3]! - deck.x0) / deck.cell)); j++)
+        deck.heights[k * deck.nx + j] = Math.max(deck.heights[k * deck.nx + j]!, top)
+  }
+
   return {
+    placements: built.placements,
+    rigFrom: ship.rigFrom,
+    masts,
+    sails,
+    deck,
     library: createBrickLibrary(),
     hull: { placements: hull, plugs },
     moving,

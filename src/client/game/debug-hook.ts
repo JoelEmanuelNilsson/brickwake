@@ -9,7 +9,8 @@ import type { Effects } from "./effects.ts"
 import type { AimReading, FireOutcome, Gunnery } from "./gunnery.ts"
 import type { HelmRequest } from "./controls.ts"
 import type { MatchHud, MatchHudText, MatchReading } from "./match-hud.ts"
-import type { FrameAverages, FrameStats } from "./frame-stats.ts"
+import type { FrameAverages, FrameSpread, FrameStats } from "./frame-stats.ts"
+import type { BrickDebris, DebrisStats } from "./brick-debris.ts"
 import type { ShipPose, SnapshotTimeline } from "./timeline.ts"
 
 /** A ship as the client draws it at the render time. Angles in radians, as in `ShipAttitude`. */
@@ -49,6 +50,7 @@ export interface DebugMatch {
 /** Live effects: particles per layer, chips, balls drawn in flight, and camera shake 0…1. */
 export interface DebugEffects {
   readonly particles: ReturnType<Effects["counts"]>
+  readonly debris: DebrisStats
   readonly ballsInFlight: number
   readonly shake: number
 }
@@ -92,6 +94,8 @@ export interface BrickwakeDebug {
   camera(): DebugCamera | null
   helm(): HelmRequest | null
   frames(): FrameAverages
+  /** Test control: percentiles of every frame since the last call with `restart`, which starts a new count. */
+  frameSpread(restart?: boolean): FrameSpread
   /** The last 32 events applied at their tick. */
   events(): ReadonlyArray<ServerEvent>
   /** Where the reticle aims on the drawn sea, the facing side, and whether it can fire. */
@@ -139,6 +143,7 @@ export interface DebugSource {
   readonly sea: () => SeaState | undefined
   readonly gunnery: () => Gunnery
   readonly effects: () => Effects
+  readonly debris: () => BrickDebris
   readonly audio: () => GameAudio
   readonly match: () => MatchReading
   readonly matchHud: () => MatchHud
@@ -212,10 +217,16 @@ export const installDebugHook = (source: DebugSource): void => {
     },
     helm: () => source.helm() ?? null,
     frames: () => source.stats().averages(),
+    frameSpread: (restart) => {
+      const spread = source.stats().spread()
+      if (restart === true) source.stats().restart()
+      return spread
+    },
     events: () => [...source.events()],
     aim: () => (source.pose(source.shipId() ?? "") === undefined ? null : source.gunnery().aim()),
     effects: () => ({
       particles: source.effects().counts(),
+      debris: source.debris().stats(),
       ballsInFlight: source.gunnery().balls.inFlight,
       shake: source.camera()?.trauma ?? 0,
     }),

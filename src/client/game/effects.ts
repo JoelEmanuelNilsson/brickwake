@@ -139,6 +139,8 @@ const splinterColor = new Color(0xc9a46c)
 const lightCount = 4
 const lightPeak = 9000
 const lightSeconds = 0.06
+/** Dust off shattered brick and timber: warm grey-tan. */
+const dustColor = [0.5, 0.43, 0.34] as const
 
 /**
  * Gun and impact effects: muzzle flash with light, lingering wind-drifted smoke, water splashes sized by impact,
@@ -156,6 +158,7 @@ export class Effects {
   readonly #layers: ReadonlyArray<ParticleLayer>
   readonly #lights: ReadonlyArray<PointLight>
   readonly #lightAge = new Float32Array(lightCount).fill(Number.POSITIVE_INFINITY)
+  readonly #lightPeak = new Float32Array(lightCount)
   #nextLight = 0
   readonly #p = particleSpawn()
   readonly #c = chipSpawn()
@@ -175,7 +178,7 @@ export class Effects {
       water: "ignore",
       soft: 1.5,
     }
-    this.smoke = new ParticleLayer({ ...base, capacity: 4096, texture: puff, soft: 3 }, sunDirection)
+    this.smoke = new ParticleLayer({ ...base, capacity: 8192, texture: puff, soft: 3 }, sunDirection)
     this.spray = new ParticleLayer({ ...base, capacity: 1024, texture: sprayTexture(), shade: [0.62, 0.7, 0.78], fadeIn: 0.02, fadeOut: 1.1, streak: 0.09, water: "vanish" }, sunDirection)
     this.droplets = new ParticleLayer(
       { ...base, capacity: 2048, texture: dot, soft: 0.15, sorted: false, fadeIn: 0.01, fadeOut: 0.6, streak: 0.035, water: "vanish" },
@@ -184,9 +187,9 @@ export class Effects {
     const hot: Omit<ParticleLayerOptions, "capacity" | "texture"> = { ...base, blending: "additive", lit: false, sorted: false, fadeIn: 0.001, soft: 0.6 }
     this.fire = new ParticleLayer({ ...hot, capacity: 512, texture: flashTexture(), fadeOut: 1.6, endTint: [0.55, 0.22, 0.06] }, sunDirection)
     this.sparks = new ParticleLayer({ ...hot, capacity: 1024, texture: dot, fadeOut: 1.2, endTint: [0.7, 0.25, 0.05], streak: 0.012, water: "vanish", soft: 0.1 }, sunDirection)
-    this.foam = new ParticleLayer({ ...base, capacity: 256, texture: foamTexture(), lit: false, sorted: false, fadeIn: 0.05, fadeOut: 1.6, water: "ride", soft: 0.3, softLift: 0.6 }, sunDirection)
+    this.foam = new ParticleLayer({ ...base, capacity: 768, texture: foamTexture(), lit: false, sorted: false, fadeIn: 0.05, fadeOut: 1.6, water: "ride", soft: 0.3, softLift: 0.6 }, sunDirection)
     this.chips = new ChipLayer(512)
-    this.chips.onWater = (x, y, z, speed) => this.#plop(x, y, z, speed)
+    this.chips.onWater = (x, y, z, speed) => this.plop(x, y, z, speed)
     this.#layers = [this.foam, this.smoke, this.spray, this.droplets, this.fire, this.sparks]
     for (const layer of this.#layers) scene.add(layer.mesh)
     scene.add(this.chips.mesh)
@@ -215,13 +218,31 @@ export class Effects {
     }
   }
 
-  /** One gun fires from (x, y, z) along the unit barrel (dx, dy, dz): flash, light, embers and a bank of smoke. */
+  /**
+   * One gun fires from (x, y, z) along the unit barrel (dx, dy, dz): a cone of flame and a light, sparks, burning wadding,
+   * and a thick bank of smoke that lingers and drifts downwind.
+   */
   muzzle(x: number, y: number, z: number, dx: number, dy: number, dz: number): void {
     const p = this.#p
     this.#at(x + dx * 1.4, y + dy * 1.4, z + dz * 1.4)
     this.#look(0, 0, 0, 5, 8.5, 0.12, 6, 3.4, 1.2, 1)
     p.rotation = Math.random() * Math.PI * 2
     this.fire.emit(p)
+    for (const [out, size] of [[0.9, 2.6], [2, 3.2], [3.3, 2.8], [4.7, 2]] as const) {
+      this.#at(x + dx * out, y + dy * out, z + dz * out)
+      this.#look(dx * 6, dy * 6, dz * 6, size, size * 1.6, random(0.07, 0.11), 7, 3.6, 1.1, 1)
+      p.rotation = Math.random() * Math.PI * 2
+      this.fire.emit(p)
+    }
+    for (let i = 0; i < 6; i++) {
+      const speed = random(8, 22)
+      this.#at(x + dx * 1.5, y + dy * 1.5, z + dz * 1.5)
+      this.#look(dx * speed + jitter(4), dy * speed + random(1, 5), dz * speed + jitter(4), 0.16, 0.1, random(1.4, 2.6), 3.2, 1.2, 0.3, 1)
+      p.gravity = 9.81
+      p.drag = 0.9
+      p.shape = ParticleShape.streak
+      this.sparks.emit(p)
+    }
     for (let i = 0; i < 8; i++) {
       const out = random(0.8, 4)
       const speed = random(25, 80)
@@ -246,21 +267,61 @@ export class Effects {
       this.#drift(1.8, 0.4, -0.2)
       this.smoke.emit(p)
     }
-    for (let i = 0; i < 14; i++) {
-      const out = random(1, 5)
+    for (let i = 0; i < 12; i++) {
+      const out = random(1, 6)
       const speed = random(8, 45)
       this.#at(x + dx * out, y + dy * out + jitter(0.5), z + dz * out)
       const tone = random(0.85, 1.12)
-      this.#look(dx * speed + jitter(4), dy * speed + random(0, 3), dz * speed + jitter(4), random(2.5, 3.5), random(13, 22), random(10, 16), 0.8 * tone, 0.77 * tone, 0.72 * tone, random(0.5, 0.78))
-      this.#drift(random(1, 1.5), 0.45, -0.3)
+      this.#look(dx * speed + jitter(4), dy * speed + random(0, 3), dz * speed + jitter(4), random(3, 4), random(18, 28), random(16, 26), 0.8 * tone, 0.77 * tone, 0.72 * tone, random(0.55, 0.8))
+      this.#drift(random(1, 1.5), 0.5, -0.12)
       this.smoke.emit(p)
     }
+    // A low bank hugging the water, as the heavy smoke of a broadside settles and rolls downwind.
+    for (let i = 0; i < 2; i++) {
+      const out = random(4, 12)
+      this.#at(x + dx * out, Math.max(0.8, y - 2 + random(0, 1)), z + dz * out)
+      this.#look(dx * random(4, 10), 0, dz * random(4, 10), random(5, 7), random(26, 34), random(22, 30), 0.78, 0.76, 0.72, 0.6)
+      this.#drift(0.9, 0.55, 0)
+      this.smoke.emit(p)
+    }
+    this.flash(x + dx * 3, y + dy * 3 + 0.5, z + dz * 3, 1)
+  }
+
+  /** A brief warm light at (x, y, z) that also lights the sea; `strength` 1 is a muzzle flash. */
+  flash(x: number, y: number, z: number, strength: number): void {
     const light = this.#lights[this.#nextLight]
     if (light !== undefined) {
-      light.position.set(x + dx * 3, y + dy * 3 + 0.5, z + dz * 3)
+      light.position.set(x, y, z)
       this.#lightAge[this.#nextLight] = 0
+      this.#lightPeak[this.#nextLight] = lightPeak * strength
     }
     this.#nextLight = (this.#nextLight + 1) % lightCount
+  }
+
+  /** Dust and splinters where something heavy lands on a deck, `size` 0–1.5. */
+  dust(x: number, y: number, z: number, size: number): void {
+    const p = this.#p
+    for (let i = 0; i < 4; i++) {
+      this.#at(x + jitter(1), y + random(0, 0.5), z + jitter(1))
+      this.#look(jitter(3) * size, random(0.5, 2), jitter(3) * size, 1.2 * size, random(4, 7) * size, random(2, 3.5), dustColor[0], dustColor[1], dustColor[2], 0.6)
+      this.#drift(1.6, 0.8, -0.2)
+      this.smoke.emit(p)
+    }
+    const c = this.#c
+    for (let i = 0; i < 6; i++) {
+      c.x = x
+      c.y = y + 0.2
+      c.z = z
+      c.vx = jitter(5)
+      c.vy = random(2, 6)
+      c.vz = jitter(5)
+      c.sx = 0.06
+      c.sy = 0.06
+      c.sz = random(0.4, 0.9)
+      c.color.copy(splinterColor)
+      c.life = random(3, 5)
+      this.chips.throw(c)
+    }
   }
 
   /** The fuse at a touch hole takes: a few sparks and a thread of smoke, played locally on click. */
@@ -279,10 +340,21 @@ export class Effects {
     this.smoke.emit(p)
   }
 
-  /** A ball meets the sea at (x, y, z) at `speed` m/s: a column and crown of spray, drifting mist and a foam ring. */
+  /** Something meets the sea at (x, y, z) at `speed` m/s (a ball ~75): a column and crown of spray, drifting mist and a foam ring, sized by the impact. */
   splash(x: number, y: number, z: number, speed: number): void {
-    const k = Math.min(1.4, Math.max(0.5, speed / 75))
+    const k = Math.min(2.2, Math.max(0.5, speed / 75))
     const p = this.#p
+    // The column: a tight, tall jet, thickest at its foot.
+    for (let i = 0; i < 10; i++) {
+      const rise = i / 9
+      this.#at(x + jitter(0.35 * k), y + 0.2, z + jitter(0.35 * k))
+      this.#look(jitter(0.6), (10 + 12 * rise) * k, jitter(0.6), (1.2 - 0.5 * rise) * k, (2.2 - rise) * k, 1.6 + 1.4 * rise, 1.1, 1.15, 1.2, 0.7)
+      p.gravity = 9.81
+      p.drag = 0.25
+      p.windShare = 0.3
+      p.shape = ParticleShape.streak
+      this.spray.emit(p)
+    }
     for (let i = 0; i < 22; i++) {
       const rise = Math.pow(Math.random(), 0.6)
       this.#at(x + jitter(1.1 * k), y + random(0, 0.8), z + jitter(1.1 * k))
@@ -318,14 +390,24 @@ export class Effects {
     }
   }
 
-  /** A ball strikes a hull at (x, y, z) travelling along unit (dx, dy, dz): brick chips, splinters, dust and a spark of impact. */
+  /**
+   * A ball strikes a hull at (x, y, z) travelling along unit (dx, dy, dz): an ember flash with light, a burst of brick
+   * chips and splinters, sparks and a dust puff. The whole bricks it knocks out are `BrickDebris`.
+   */
   hit(x: number, y: number, z: number, dx: number, dy: number, dz: number): void {
     const p = this.#p
     const c = this.#c
     this.#at(x - dx * 0.5, y - dy * 0.5, z - dz * 0.5)
     this.#look(0, 0, 0, 3.2, 4.5, 0.08, 7, 4.6, 2.4, 1)
     this.fire.emit(p)
-    for (let i = 0; i < 18; i++) {
+    for (let i = 0; i < 5; i++) {
+      this.#at(x - dx * 0.8 + jitter(0.6), y + jitter(0.6), z - dz * 0.8 + jitter(0.6))
+      this.#look(-dx * random(1, 4) + jitter(1.5), random(0.5, 2.5), -dz * random(1, 4) + jitter(1.5), random(0.8, 1.4), random(1.6, 2.6), random(0.18, 0.32), 5.5, 2.2, 0.5, 0.9)
+      p.rotation = Math.random() * Math.PI * 2
+      this.fire.emit(p)
+    }
+    this.flash(x - dx * 3, y + 1, z - dz * 3, 0.2)
+    for (let i = 0; i < 12; i++) {
       c.x = x + jitter(0.4)
       c.y = y + jitter(0.4)
       c.z = z + jitter(0.4)
@@ -334,9 +416,9 @@ export class Effects {
       c.vy = random(3, 10)
       c.vz = -dz * back + jitter(5)
       const brick = Math.random() < 0.5
-      c.sx = 0.4
-      c.sy = brick ? 0.48 : 0.16
-      c.sz = brick ? 0.8 : 0.4
+      c.sx = brick ? 0.2 : 0.14
+      c.sy = brick ? 0.16 : 0.08
+      c.sz = brick ? 0.3 : 0.2
       c.color.copy(chipColors[i % chipColors.length] ?? splinterColor)
       c.life = random(4, 8)
       this.chips.throw(c)
@@ -366,7 +448,7 @@ export class Effects {
     }
     for (let i = 0; i < 7; i++) {
       this.#at(x - dx + jitter(0.6), y + jitter(0.6), z - dz + jitter(0.6))
-      this.#look(-dx * random(2, 6) + jitter(2), random(0.5, 2.5), -dz * random(2, 6) + jitter(2), 1.2, random(5, 8), random(2.5, 4.5), 0.46, 0.39, 0.31, 0.7)
+      this.#look(-dx * random(2, 6) + jitter(2), random(0.5, 2.5), -dz * random(2, 6) + jitter(2), 1.2, random(5, 8), random(2.5, 4.5), dustColor[0], dustColor[1], dustColor[2], 0.7)
       this.#drift(1.6, 0.8, -0.2)
       this.smoke.emit(p)
     }
@@ -408,6 +490,82 @@ export class Effects {
     p.shape = ParticleShape.flat
     p.rotation = Math.random() * Math.PI * 2
     p.spin = jitter(0.2)
+    this.foam.emit(p)
+  }
+
+  /** Trapped air bursts out of a foundering hull at the waterline (x, y, z): jets of spray and a boil of foam and mist. */
+  airBurst(x: number, y: number, z: number): void {
+    const p = this.#p
+    for (let i = 0; i < 16; i++) {
+      this.#at(x + jitter(1.5), y + 0.2, z + jitter(1.5))
+      this.#look(jitter(3), random(9, 20), jitter(3), random(1, 1.8), random(3, 5), random(1.4, 2.4), 1.15, 1.2, 1.25, 0.75)
+      p.gravity = 9.81
+      p.drag = 0.4
+      p.windShare = 0.4
+      p.shape = ParticleShape.streak
+      this.spray.emit(p)
+    }
+    for (let i = 0; i < 30; i++) {
+      this.#at(x + jitter(1), y + 0.3, z + jitter(1))
+      this.#look(jitter(6), random(6, 16), jitter(6), random(0.25, 0.45), 0.2, 3, 1.3, 1.35, 1.4, 0.9)
+      p.gravity = 9.81
+      p.shape = ParticleShape.streak
+      this.droplets.emit(p)
+    }
+    for (let i = 0; i < 3; i++) {
+      this.#at(x + jitter(2), y + random(1, 3), z + jitter(2))
+      this.#look(jitter(1), random(1, 2), jitter(1), 3, random(10, 14), random(3, 5), 1.0, 1.03, 1.06, 0.4)
+      this.#drift(0.8, 0.8, 0)
+      this.spray.emit(p)
+    }
+    this.#at(x, y, z)
+    this.#look(0, 0, 0, 2, random(9, 13), random(4, 6), 0.95, 0.97, 1, 0.85)
+    p.shape = ParticleShape.flat
+    p.rotation = Math.random() * Math.PI * 2
+    this.foam.emit(p)
+  }
+
+  /** Air boiling up through the water round a sinking hull at (x, y, z): white bubbles bursting in foam. */
+  bubbles(x: number, y: number, z: number, spread: number): void {
+    const p = this.#p
+    for (let i = 0; i < 4; i++) {
+      this.#at(x + jitter(spread), y + 0.05, z + jitter(spread))
+      this.#look(jitter(0.4), random(0.6, 1.6), jitter(0.4), random(0.15, 0.3), 0.05, random(0.4, 0.8), 1.3, 1.35, 1.4, 0.85)
+      p.gravity = 2
+      p.shape = ParticleShape.billboard
+      this.droplets.emit(p)
+    }
+    this.#at(x + jitter(spread), y, z + jitter(spread))
+    this.#look(0, 0, 0, random(0.8, 1.6), random(2.5, 4), random(1.5, 2.5), 0.95, 0.97, 1, 0.8)
+    p.shape = ParticleShape.flat
+    p.rotation = Math.random() * Math.PI * 2
+    this.foam.emit(p)
+  }
+
+  /** The whirl where a hull went down at (x, y, z): foam wheeling round and in; `strength` fades 1 → 0 over its life. */
+  vortex(x: number, y: number, z: number, strength: number): void {
+    const p = this.#p
+    const arms = 3
+    for (let i = 0; i < arms * 2; i++) {
+      const radius = random(2, 11)
+      const angle = (i % arms) * ((Math.PI * 2) / arms) + radius * 0.35 + Math.random() * 0.4
+      const cos = Math.cos(angle)
+      const sin = Math.sin(angle)
+      const swirl = 5 / Math.sqrt(radius)
+      this.#at(x + cos * radius, y, z + sin * radius)
+      // Tangential and a little inward: the spiral a drain draws.
+      this.#look(-sin * swirl * radius * 0.5 - cos * 1.2, 0, cos * swirl * radius * 0.5 - sin * 1.2, random(1.2, 2.4), random(3, 5), random(2.5, 4), 0.95, 0.97, 1, 0.85 * strength)
+      p.drag = 0.5
+      p.shape = ParticleShape.flat
+      p.rotation = angle
+      p.spin = 0.9
+      this.foam.emit(p)
+    }
+    this.#at(x, y, z)
+    this.#look(0, 0, 0, random(4, 6), random(8, 12), random(2, 3), 0.9, 0.95, 0.97, 0.7 * strength)
+    p.shape = ParticleShape.flat
+    p.rotation = Math.random() * Math.PI * 2
+    p.spin = 1.2
     this.foam.emit(p)
   }
 
@@ -466,12 +624,12 @@ export class Effects {
       const age = this.#lightAge[i]! + dt
       this.#lightAge[i] = age
       const light = this.#lights[i]
-      if (light !== undefined) light.intensity = age > lightSeconds * 8 ? 0 : lightPeak * Math.exp(-age / lightSeconds)
+      if (light !== undefined) light.intensity = age > lightSeconds * 8 ? 0 : this.#lightPeak[i]! * Math.exp(-age / lightSeconds)
     }
   }
 
-  /** A chip or splinter drops into the sea. */
-  #plop(x: number, y: number, z: number, speed: number) {
+  /** A chip, splinter or brick drops into the sea at `speed` m/s. */
+  plop(x: number, y: number, z: number, speed: number): void {
     const p = this.#p
     const n = speed > 6 ? 5 : 2
     for (let i = 0; i < n; i++) {

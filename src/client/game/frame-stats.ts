@@ -10,6 +10,17 @@ export interface FrameAverages {
   readonly intervalMs: number
 }
 
+/** Percentiles of every frame since `FrameStats.restart`, milliseconds: the frame's own CPU time and the interval between frames. */
+export interface FrameSpread {
+  readonly frames: number
+  readonly cpu: { readonly p50: number; readonly p99: number; readonly max: number }
+  readonly interval: { readonly p50: number; readonly p99: number; readonly max: number }
+  /** Frames more than twice the median interval apart. */
+  readonly hitches: number
+}
+
+const historyCount = 8192
+
 /** Frame timing: CPU time of each frame, the interval between frames, and GPU time from timer queries when available. */
 export class FrameStats {
   readonly #cpu = new Float64Array(sampleCount)
@@ -17,6 +28,9 @@ export class FrameStats {
   readonly #gpu = new Float64Array(sampleCount)
   #frames = 0
   #gpuSamples = 0
+  readonly #cpuHistory = new Float32Array(historyCount)
+  readonly #intervalHistory = new Float32Array(historyCount)
+  #history = 0
   readonly #gl: WebGL2RenderingContext
   readonly #timer: { readonly TIME_ELAPSED_EXT: number; readonly GPU_DISJOINT_EXT: number } | null
   readonly #query: WebGLQuery | null
@@ -58,6 +72,33 @@ export class FrameStats {
     this.#cpu[slot] = cpuMs
     this.#interval[slot] = intervalMs
     this.#frames++
+    if (this.#history < historyCount && intervalMs > 0) {
+      this.#cpuHistory[this.#history] = cpuMs
+      this.#intervalHistory[this.#history] = intervalMs
+      this.#history++
+    }
+  }
+
+  /** Forget the frames recorded so far; `spread` covers the frames from here on (up to 8192). */
+  restart(): void {
+    this.#history = 0
+  }
+
+  /** Percentiles of the frames since `restart`. */
+  spread(): FrameSpread {
+    const n = this.#history
+    const cpu = this.#cpuHistory.slice(0, n).sort()
+    const interval = this.#intervalHistory.slice(0, n).sort()
+    const at = (values: Float32Array, q: number) => values[Math.min(n - 1, Math.floor(n * q))] ?? Number.NaN
+    const median = at(interval, 0.5)
+    let hitches = 0
+    for (let i = 0; i < n; i++) if ((interval[i] ?? 0) > 2 * median) hitches++
+    return {
+      frames: n,
+      cpu: { p50: at(cpu, 0.5), p99: at(cpu, 0.99), max: cpu[n - 1] ?? Number.NaN },
+      interval: { p50: median, p99: at(interval, 0.99), max: interval[n - 1] ?? Number.NaN },
+      hitches,
+    }
   }
 
   /** Averages over the last 120 frames. */

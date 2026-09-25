@@ -1,4 +1,4 @@
-import { Group, MathUtils, MeshDepthMaterial, MeshStandardMaterial, type PerspectiveCamera, RGBADepthPacking, Vector3, Vector4, type WebGLProgramParametersWithUniforms, type WebGLRenderer } from "three"
+import { Group, MathUtils, Matrix4, Quaternion, MeshDepthMaterial, MeshStandardMaterial, type PerspectiveCamera, RGBADepthPacking, Vector3, Vector4, type WebGLProgramParametersWithUniforms, type WebGLRenderer } from "three"
 import { type BrickDetail, brickDetailFor, BrickShipMesh } from "../bricks/brick-ship-mesh.ts"
 import { type DrawnPart, removeAndReveal } from "../bricks/ship-wreck.ts"
 import { pirateLivery } from "../rig/sail-livery.ts"
@@ -60,6 +60,13 @@ const moveVertices = (chunk: string, uniforms: MovingUniforms, shader: WebGLProg
     .replace("void main() {", "void main() {\n  mat4 movedInstance = moveInstance(instanceMatrix);\n  #define instanceMatrix movedInstance")
 }
 
+const scratchSwing = new Matrix4()
+const scratchTurn = new Matrix4()
+const scratchPose = new Matrix4()
+const scratchAt = new Vector3()
+const scratchQuaternion = new Quaternion()
+const scratchOne = new Vector3(1, 1, 1)
+
 /** The galleon as one ship in the game: brick hull, recoiling cannons, bracing yards, turning rudder, sails that set; posed each frame. */
 export class ShipView {
   readonly group = new Group()
@@ -81,6 +88,8 @@ export class ShipView {
   /** The wreck drawn and how many of its gone parts are off the meshes. */
   #wreck: Wreck | undefined
   #wreckDrawn = 0
+  /** Parts are off the meshes that no wreck lists: shed while foundering. */
+  #shed = false
 
   constructor(name: string, model: GalleonModel) {
     this.#model = model
@@ -143,12 +152,14 @@ export class ShipView {
    * wreck (a new life, a repair, a pooled view reused) first restores the whole ship.
    */
   showWreck(wreck: Wreck | undefined): void {
-    if (wreck !== this.#wreck) {
-      if (this.#wreckDrawn > 0) {
+    if (wreck !== this.#wreck || (this.#shed && this.pose.life === "afloat")) {
+      if (this.#wreckDrawn > 0 || this.#shed) {
         this.#hull.restore()
         this.#moving.restore()
         this.#air = this.#model.air.clone()
+        this.rig.mend()
         this.#wreckDrawn = 0
+        this.#shed = false
       }
       this.#wreck = wreck
     }
@@ -156,6 +167,63 @@ export class ShipView {
     const gone = wreck.gone.slice(this.#wreckDrawn)
     this.#wreckDrawn = wreck.gone.length
     removeAndReveal(this.#locate, this.#air, gone)
+    this.#syncRig()
+  }
+
+  /** Take parts off this drawn ship that no wreck lists (a foundering ship coming apart); undone when it is afloat again. */
+  shed(parts: ReadonlyArray<number>): void {
+    if (parts.length === 0) return
+    this.#shed = true
+    removeAndReveal(this.#locate, this.#air, parts)
+    this.#syncRig()
+  }
+
+  /** Whether ship part `part` is still on the drawn ship. */
+  isPresent(part: number): boolean {
+    const slot = this.#model.slots[part]
+    return slot !== undefined && (slot.mesh === "hull" ? this.#hull : this.#moving).isPresent(slot.index)
+  }
+
+  /** The yards' brace angle as drawn, radians. */
+  get brace(): number {
+    return this.#brace
+  }
+
+  /** World matrix of part `part` as drawn at the current pose (yards braced; cannon recoil ignored), into `out`. */
+  partMatrix(part: number, out: Matrix4): Matrix4 {
+    const placement = this.#model.placements[part]
+    if (placement === undefined) return out.identity()
+    out.copy(placement.matrix)
+    const slot = this.#model.slots[part]
+    const y = out.elements[13] ?? 0
+    if (slot?.mesh === "moving" && y > this.#model.yardFloor) {
+      const x = out.elements[12] ?? 0
+      const pivot = this.#model.mastXs.reduce((best, m) => (Math.abs(x - m) < Math.abs(x - best) ? m : best), Number.POSITIVE_INFINITY)
+      scratchSwing.makeTranslation(-pivot, 0, 0).premultiply(scratchTurn.makeRotationY(this.#brace))
+      scratchSwing.premultiply(scratchTurn.makeTranslation(pivot, 0, 0))
+      out.premultiply(scratchSwing)
+    }
+    const pose = this.pose
+    scratchPose.compose(scratchAt.set(pose.x, pose.y, pose.z), scratchQuaternion.set(pose.qx, pose.qy, pose.qz, pose.qw), scratchOne)
+    return out.premultiply(scratchPose)
+  }
+
+  /** A ball tore through a sail at ship-local `local` (x, y, z): punch a ragged hole in the sail it crossed. */
+  punchSail(x: number, y: number, z: number): void {
+    const sails = this.#model.sails
+    let best = -1
+    for (let i = 0; i < sails.length; i++) {
+      const sail = sails[i]
+      if (sail === undefined || y < sail.foot - 0.5 || y > sail.top + 0.5) continue
+      if (best < 0 || Math.abs(x - sail.x) < Math.abs(x - (sails[best]?.x ?? 0))) best = i
+    }
+    if (best >= 0) this.rig.punchSail(best, y, z, 0.4 + Math.random() * 0.25)
+  }
+
+  /** Sails hang while their yard does; a mast's flags and ropes stand while its top does. */
+  #syncRig() {
+    this.#model.sails.forEach((sail, i) => this.rig.setSailShown(i, sail.yardPart < 0 || this.isPresent(sail.yardPart)))
+    this.#model.masts.forEach((mast, m) => this.rig.setMastShown(m, mast.topPart < 0 || this.isPresent(mast.topPart)))
   }
 
   readonly #locate = (part: number): DrawnPart | undefined => {
