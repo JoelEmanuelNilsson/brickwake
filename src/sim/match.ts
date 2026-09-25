@@ -314,8 +314,8 @@ export const stepMatch = (
   const env = { sea: state.sea, wind: state.wind, time: start }
   // Sunk hulls keep falling through the water until they respawn, so a ship never stops mid-plunge on screen.
   let moved = collideShips(
-    // Holes flood an afloat hull; a foundering one follows the sinking flood alone, so it goes under on time.
-    ships.map((ship) => stepShip(ship, env, defaultHull, isAfloat(ship) ? shipFlooding(ship.removedParts) : undefined)),
+    // Holes flood a hull afloat or foundering, so a ship does not bob up when it starts to sink; a sunk one has no buoyancy left.
+    ships.map((ship) => stepShip(ship, env, defaultHull, ship.life._tag !== "sunk" ? shipFlooding(ship.removedParts) : undefined)),
     isAbove,
   )
   // A ship knocked past its limit of stability founders: nobody may sail on upside down.
@@ -323,7 +323,8 @@ export const stepMatch = (
     const ship = moved[index]!
     if (!isAfloat(ship) || rotate(ship.orientation, vec3(0, 1, 0)).y > Math.cos(tuning.sinking.capsizeHeel)) continue
     const floodEnd = rotate(ship.orientation, vec3(1, 0, 0)).y <= 0 ? 1 : -1
-    moved = moved.with(index, { ...ship, hp: 0, life: { _tag: "sinking", since: start, floodEnd }, controls: { rudder: 0, sail: 0 } })
+    const floodSide = rotate(ship.orientation, vec3(0, 0, 1)).y <= 0 ? 1 : -1
+    moved = moved.with(index, { ...ship, hp: 0, life: { _tag: "sinking", since: start, floodEnd, floodSide }, controls: { rudder: 0, sail: 0 } })
     pending = pending.filter((shot) => shot.shipId !== ship.id)
     const hit = ship.lastHitBy
     const by =
@@ -351,9 +352,10 @@ export const stepMatch = (
       moved = moved.with(index, { ...target, hp, lastHitBy })
       return { damage: target.hp - hp, hp, sunk: undefined }
     }
-    // The end the killing ball struck floods first, so the ship goes down by the bow or the stern.
+    // The end and side the killing ball struck flood first, so the ship lists to it and goes down by the bow or the stern.
     const floodEnd = localPoint.x >= 0 ? 1 : -1
-    moved = moved.with(index, { ...target, hp, life: { _tag: "sinking", since: time, floodEnd }, controls: { rudder: 0, sail: 0 } })
+    const floodSide = localPoint.z >= 0 ? 1 : -1
+    moved = moved.with(index, { ...target, hp, life: { _tag: "sinking", since: time, floodEnd, floodSide }, controls: { rudder: 0, sail: 0 } })
     pending = pending.filter((shot) => shot.shipId !== target.id)
     const by = moved.some((ship) => ship.id === ball.shooter) ? ball.shooter : undefined
     if (state.phase._tag === "playing") ({ ships: moved, teamSinks } = scoreSink(state.rules, { ships: moved, teamSinks }, target.id, by))

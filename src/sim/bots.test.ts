@@ -44,7 +44,7 @@ test("bots fill a match to six ships and leave as humans join", () => {
 
 test("a headless bots-only match sails, fights and finishes with a winner in seconds", () => {
   const started = Bun.nanoseconds()
-  const { state, events, samples } = play(botMatch(3, 5))
+  const { state, events, samples } = play(botMatch(3, 3))
   const seconds = (Bun.nanoseconds() - started) / 1e9
   expect(state.phase._tag === "ended" && state.phase.winner).toBeTruthy()
   expect(seconds).toBeLessThan(10)

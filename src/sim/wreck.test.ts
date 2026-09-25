@@ -127,7 +127,7 @@ test("play beginning repairs afloat ships' bricks and HP, and a respawned ship i
   const shot = ballFrom(1, vec3(0.2, 0.9, -40), vec3(0, 2, tuning.guns.muzzleSpeed))
   sinking = { ...sinking, balls: [shot] }
   let respawned: ShipState | undefined
-  for (let tick = 0; tick < 12 * SIM_HZ && respawned === undefined; tick++) {
+  for (let tick = 0; tick < (tuning.sinking.seconds + tuning.sinking.respawnSeconds + 1) * SIM_HZ && respawned === undefined; tick++) {
     const step = stepMatch(sinking, new Map())
     sinking = step.state
     if (step.events.some((event) => event._tag === "shipRespawned")) respawned = sinking.ships[0]

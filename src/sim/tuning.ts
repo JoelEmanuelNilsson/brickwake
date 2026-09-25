@@ -162,33 +162,40 @@ export const tuning = {
   },
   damage: {
     /** Hull HP a ship starts with. */
-    hullHp: 100,
+    hullHp: 225,
     /** HP one ball takes off the hull it hits. */
     perBall: 5,
     /** HP a ball takes when it strikes the upper works (rails, castles, rig), and when it meets no brick (the sails). */
     upperWorksPerBall: 2,
     sailsPerBall: 1,
     /** Bricks a ball knocks out: those within `radius` m of its path over the first `depth` m from the impact, nearest first, at most the cap of the zone it struck. */
-    bricks: { radius: 0.5, depth: 0.9, hullCap: 12, upperWorksCap: 6 },
+    bricks: { radius: 0.5, depth: 0.9, hullCap: 8, upperWorksCap: 4 },
     /**
      * Holes at the waterline let the sea in as the ship rolls and heaves: each hull part gone whose bottom was below
      * `height` m costs the nearest buoyancy column `perPart` of its lift, at most `maxPerColumn`, so a ship holed on
      * one side lists to it.
      */
-    flooding: { height: 0.5, perPart: 0.08, maxPerColumn: 0.7 },
+    flooding: { height: 0.5, perPart: 0.055, maxPerColumn: 0.7 },
   },
   sinking: {
     /** Seconds from HP 0 until the ship is under and out of play; it takes no orders and cannot be hit meanwhile. */
-    seconds: 4,
+    seconds: 12,
     /** Heel or pitch past which a ship capsizes and founders, radians. */
     capsizeHeel: 75 * degrees,
     /** A capsize this soon after an enemy ball took HP is that enemy's sink, seconds: the broadside that knocked the ship down wins it. */
     capsizeCreditSeconds: 20,
     /** Seconds a sunk ship waits before it respawns. */
     respawnSeconds: 5,
-    /** Seconds one buoyancy column takes to flood, and how much later the far end starts than the flooding end. */
-    floodSeconds: 0.8,
-    floodSpread: 2.0,
+    /**
+     * First the hull settles over `settleSeconds`, each column losing `all` of its lift, plus up to `lowSide` on the
+     * flood side and `floodEnd` at the flooding end, so it lists and trims before it goes.
+     */
+    settleSeconds: 7,
+    settleLoss: { all: 0.3, lowSide: 0.22, floodEnd: 0.25 },
+    /** From `plungeAt` s the flooding end's columns lose the rest over `floodSeconds` each, the far end `floodSpread` s later: it lifts, then plunges. */
+    plungeAt: 6.5,
+    floodSeconds: 1.5,
+    floodSpread: 3.0,
     /** Quadratic drag on a flooded hull's vertical speed through the water, N per (m/s)²: ~200 m² of hull plan at drag coefficient 1. */
     drag: 1.0e5,
   },
@@ -203,9 +210,9 @@ export const tuning = {
     /** Ships a room holds, humans and bots together. */
     maxShips: 12,
     /** FFA: first to `scoreLimit` sinks or the most after `timeLimit` seconds. Warmup before, results after. */
-    ffa: { scoreLimit: 8, timeLimit: 8 * 60, warmupSeconds: 10, endedSeconds: 12 },
+    ffa: { scoreLimit: 5, timeLimit: 10 * 60, warmupSeconds: 10, endedSeconds: 12 },
     /** TDM, Pirates vs Navy: first side to `scoreLimit` sinks or the side with the most after `timeLimit` seconds. */
-    tdm: { scoreLimit: 15, timeLimit: 10 * 60, warmupSeconds: 10, endedSeconds: 15 },
+    tdm: { scoreLimit: 8, timeLimit: 12 * 60, warmupSeconds: 10, endedSeconds: 15 },
     /** Joining ships start on this ring about the arena centre, in the free slot farthest from others. */
     spawnRing: { radius: 260, slots: 12 },
   },

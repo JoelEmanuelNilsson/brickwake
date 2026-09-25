@@ -266,7 +266,7 @@ test("a broadside at the target dummy fires, hits, breaks bricks and lowers its 
   client.send({ _tag: "join", mode: "ffa", scenario: "target-dummy", room: "wreck-test" })
   const welcome = await client.nextOf("welcome", 0)
   const dummy = welcome.ships.find((ship) => ship.id === dummyShipId)!
-  expect(dummy.hp).toBe(100)
+  expect(dummy.hp).toBe(tuning.damage.hullHp)
   client.send({ _tag: "fireBroadside", side: "port", aimPoint: [0, 0, 150] })
   await client.next(
     (message): message is Snapshot => message._tag === "snapshot" && message.events.some((event) => event._tag === "broadsideRefused"),
@@ -285,7 +285,7 @@ test("a broadside at the target dummy fires, hits, breaks bricks and lowers its 
     expect(Math.hypot(at.x - hit.point[0], at.y - hit.point[1], at.z - hit.point[2])).toBeLessThan(0.01)
   }
   const last = client.snapshots().at(-1)!.snapshot.ships.find((ship) => ship.id === dummyShipId)!
-  expect(last.hp).toBe(100 - hits.reduce((sum, hit) => sum + hitDamage(hit.zone), 0))
+  expect(last.hp).toBe(tuning.damage.hullHp - hits.reduce((sum, hit) => sum + hitDamage(hit.zone), 0))
   const removed = hits.flatMap((hit) => hit.removed)
   expect(removed.length).toBeGreaterThan(0)
 

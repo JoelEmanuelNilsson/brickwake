@@ -49,7 +49,7 @@ export interface WindSnapshot extends Schema.Schema.Type<typeof WindSnapshot> {}
 /** A ship's life, as in `ShipLife`. */
 export const ShipLifeSchema = Schema.TaggedUnion({
   afloat: {},
-  sinking: { since: Schema.Finite, floodEnd: Schema.Literals([1, -1]) },
+  sinking: { since: Schema.Finite, floodEnd: Schema.Literals([1, -1]), floodSide: Schema.Literals([1, -1]) },
   sunk: { respawnAt: Schema.Finite },
 })
 
