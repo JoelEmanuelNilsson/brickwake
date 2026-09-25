@@ -80,19 +80,21 @@ const maxClientFrameBytes = 16 * 1024
 
 /**
  * The game server on 127.0.0.1:`port` (0 picks a free port); exposes `HttpServer` for its address.
- * `lag` delays every message each way, to feel the game over a slow network.
+ * `lag` delays every message each way, to feel the game over a slow network. `quickPlaySeed` makes quick-play matches
+ * repeat, for browser checks that must not depend on a random wind.
  */
-export const layer = (options: { readonly port: number; readonly lag?: NetworkLag }) =>
+export const layer = (options: { readonly port: number; readonly lag?: NetworkLag; readonly quickPlaySeed?: string }) =>
   // The request logger reports every normal WebSocket close as an interrupted request.
   HttpRouter.serve(gameRoute(options.lag ?? noLag), { disableLogger: true }).pipe(
-    Layer.provide(Rooms.layer),
+    Layer.provide(options.quickPlaySeed === undefined ? Rooms.layer : Rooms.layerSeeded(options.quickPlaySeed)),
     // A graceful stop waits on open WebSocket handlers until the timeout, so Ctrl-C would hang; there is no HTTP work to drain.
     Layer.provideMerge(
       BunHttpServer.layer({
         hostname: "127.0.0.1",
         port: options.port,
         gracefulShutdownTimeout: 0,
-        websocket: { maxPayloadLength: maxClientFrameBytes },
+        // Snapshots are JSON of repeated field names and floats: deflate cuts 12 ships from ~116 to ~45 KB/s per client for ~25 µs a snapshot.
+        websocket: { maxPayloadLength: maxClientFrameBytes, perMessageDeflate: true },
       }),
     ),
   )

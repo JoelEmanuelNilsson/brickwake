@@ -132,6 +132,8 @@ const quickPlayMatch = Effect.fn("Rooms.quickPlayMatch")(function* (mode: MatchM
 export const make = Effect.gen(function* () {
   const scope = yield* Effect.scope
   // Every match shares the one generated galleon; building it here keeps its ~150 ms out of the first room's ticks.
+  // Quick-play seeds and winds come from the Random the registry was built with, so a seeded registry repeats them.
+  const random = yield* Random.Random
   const started = yield* Clock.currentTimeMillis
   const galleon = galleonClass()
   yield* Effect.logInfo(`galleon generated: ${galleon.graph.count} parts in ${(yield* Clock.currentTimeMillis) - started} ms`)
@@ -163,7 +165,7 @@ export const make = Effect.gen(function* () {
       for (const room of rooms.values()) {
         if (room.scenario === undefined && room.state.rules.mode === mode && room.members.size < tuning.match.maxShips) return room
       }
-      return yield* openRoom(yield* quickPlayMatch(mode), undefined)
+      return yield* openRoom(yield* quickPlayMatch(mode).pipe(Effect.provideService(Random.Random, random)), undefined)
     })
 
   const freeSeat = (room: Room, name: ScenarioName) =>
@@ -253,3 +255,6 @@ export const make = Effect.gen(function* () {
 
 /** The room registry, with room loops stopped when the Layer closes. */
 export const layer = Layer.effect(Service, make)
+
+/** The room registry with quick-play matches drawn from `seed`: the same seed opens the same sequence of seeds and winds. */
+export const layerSeeded = (seed: string) => Layer.effect(Service, make.pipe(Random.withSeed(seed)))

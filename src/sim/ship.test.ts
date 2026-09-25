@@ -229,6 +229,20 @@ describe("arena boundary", () => {
     expect(furthest).toBeLessThan(tuning.arena.radius)
   })
 
+  test("a ship held at the edge keeps steerage and turns back in", () => {
+    const outward = createMatch({
+      seed: 1,
+      sea: seas.calm,
+      wind: makeWind({ toward: windToward, speed: 14, gustiness: 0 }),
+      ships: [{ id, x: 0, z: 450, heading: windToward }],
+    })
+    const held = sail(outward, { rudder: 0, sail: 2 }, 60)
+    expect(Math.abs(shipForwardSpeed(ship(held)))).toBeLessThan(1.5)
+    const turned = sail(held, { rudder: 1, sail: 2 }, 30)
+    const home = sail(turned, { rudder: 0, sail: 2 }, 30)
+    expect(radius(home)).toBeLessThan(tuning.arena.softRadius - 100)
+  })
+
   test("a drifting ship outside the arena is pushed back in", () => {
     const outside = createMatch({
       seed: 1,

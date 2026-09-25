@@ -143,13 +143,16 @@ Sink ships to score. Sunk ships respawn.
 | Reload | 6 s per side |
 | Muzzle speed / gravity | 90 m/s / 9.81 m/s² |
 | Elevation / traverse | −4° … +12° / ±25° from perpendicular |
-| Per-gun spread | ±1°, from the match's seeded RNG |
-| Damage | 5 per ball; hull 100 HP |
-| Sinking / respawn | 4 s sinking (not hittable, no control), respawn 5 s later |
-| FFA | first to 10 sinks or 8 min |
-| TDM | Pirates vs Navy, first to 20 sinks or 10 min |
+| Per-gun spread | ±1° traverse, ±0.25° elevation, from the match's seeded RNG: a round patch about the reticle (±4 m across, ±6 m along at 220 m) |
+| Damage | per ball: hull 5, upper works 2, sails 1; hull 100 HP (~22 hits to sink, ~28 in a melee) |
+| Sinking / respawn | 4 s sinking (not hittable, no control), respawn 5 s later; a ship heeled or pitched past 75° capsizes and founders (no one credited) |
+| FFA | first to 8 sinks or 8 min (6 bots: 2.5 sinks/min, top captain 4–8) |
+| TDM | Pirates vs Navy, first to 15 sinks or 10 min |
 | Room | 12 ships max; bots fill up to 6 ships and leave as humans join |
-| Arena | circle, radius 700 m, soft boundary pushes ships back |
+| Bot aim | per-broadside aim error 10–20 % of range: bots hit ~40 %, a careful human (~55 %) wins ~80 % of duels, a median duel lasts ~70 s |
+| Sea-keeping | sails lose force as cos²(heel); heave/pitch damping pays for itself in forward speed (added resistance in waves): into the open-sea swell at full sail 10.4 m/s, pitch ±6.6°, 0.46 g peak |
+| Snapshots | JSON with per-message deflate: 12 ships ≈ 45 KB/s per client (116 KB/s raw) |
+| Arena | circle, radius 700 m; from 640 m an inward current, 2× full-sail speed at 700 m, carries ships back while their rudders keep water past them |
 
 ## Architecture
 

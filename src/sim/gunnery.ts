@@ -223,10 +223,10 @@ export const fireGun = (options: {
   const spread = tuning.guns.spread
   const [bearing, rng1] = nextRange(options.rng, 0, 2 * Math.PI)
   const [area, rng] = nextRange(rng1, 0, 1)
-  const error = spread * Math.sqrt(area)
+  const error = Math.sqrt(area)
   const barrel = barrelOf(pose, mount, {
-    elevation: aim.lay.elevation + error * Math.sin(bearing),
-    traverse: aim.lay.traverse + error * Math.cos(bearing),
+    elevation: aim.lay.elevation + spread.elevation * error * Math.sin(bearing),
+    traverse: aim.lay.traverse + spread.traverse * error * Math.cos(bearing),
   })
   const ball: Cannonball = {
     id: options.id,

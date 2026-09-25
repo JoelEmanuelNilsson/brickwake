@@ -6,13 +6,13 @@ import { shipAttitude, shipId, type ShipControls } from "./ship.ts"
 import { SIM_HZ, tuning } from "./tuning.ts"
 import { angleOffWind, makeWind } from "./wind.ts"
 
-const botMatch = (seed: number, scoreLimit: number, humans: ReadonlyArray<ShipSpawn> = []) =>
+const botMatch = (seed: number, scoreLimit: number, humans: ReadonlyArray<ShipSpawn> = [], toward = 0.7) =>
   balanceBots(
     createMatch({
       seed,
       rules: { ...ffaRules, warmupSeconds: 0, scoreLimit },
       sea: seas.open,
-      wind: makeWind({ toward: 0.7, speed: 14, gustiness: 1 }),
+      wind: makeWind({ toward, speed: 14, gustiness: 1 }),
       ships: humans,
     }),
   )
@@ -44,7 +44,7 @@ test("bots fill a match to six ships and leave as humans join", () => {
 
 test("a headless bots-only match sails, fights and finishes with a winner in seconds", () => {
   const started = Bun.nanoseconds()
-  const { state, events, samples } = play(botMatch(3, 3))
+  const { state, events, samples } = play(botMatch(3, 5))
   const seconds = (Bun.nanoseconds() - started) / 1e9
   expect(state.phase._tag === "ended" && state.phase.winner).toBeTruthy()
   expect(seconds).toBeLessThan(10)
@@ -53,7 +53,6 @@ test("a headless bots-only match sails, fights and finishes with a winner in sec
   const afloat = samples.flatMap((sample) => sample.ships.filter((ship) => ship.life._tag === "afloat").map((ship) => ({ ship, wind: sample.wind })))
   const inIrons = afloat.filter(({ ship, wind }) => angleOffWind(shipAttitude(ship).heading, wind) < Math.PI / 4).length
   expect(inIrons / afloat.length).toBeLessThan(0.02)
-  expect(Math.max(...afloat.map(({ ship }) => Math.hypot(ship.position.x, ship.position.z)))).toBeLessThan(tuning.arena.softRadius)
 
   const fired = events.filter((event) => event._tag === "cannonFired")
   const hits = events.filter((event) => event._tag === "ballHit")
@@ -62,6 +61,28 @@ test("a headless bots-only match sails, fights and finishes with a winner in sec
   const sinks = events.filter((event) => event._tag === "shipSunk")
   expect(new Set(sinks.map((event) => event.by)).size).toBeGreaterThan(1)
 }, 30_000)
+
+test("bots stay inside the arena and upright whatever the seed and wind", () => {
+  const seconds = 180
+  for (let seed = 1; seed <= 10; seed++) {
+    // The golden angle walks the wind round the compass, so ten seeds meet ten different winds.
+    const toward = (seed * 2.399963) % (2 * Math.PI)
+    let state = botMatch(seed, 1000, [], toward)
+    let furthest = 0
+    let steepest = 0
+    while (state.tick < seconds * SIM_HZ) {
+      state = stepMatch(state, new Map()).state
+      if (state.tick % 10 !== 0) continue
+      for (const ship of state.ships) {
+        if (ship.life._tag !== "afloat") continue
+        furthest = Math.max(furthest, Math.hypot(ship.position.x, ship.position.z))
+        steepest = Math.max(steepest, Math.abs(shipAttitude(ship).heel))
+      }
+    }
+    expect({ seed, inside: furthest < tuning.arena.softRadius }).toEqual({ seed, inside: true })
+    expect(steepest).toBeLessThan(tuning.sinking.capsizeHeel)
+  }
+}, 60_000)
 
 test("a match with bots replays exactly from its seed and input log", () => {
   const human = shipId("ship-1")
