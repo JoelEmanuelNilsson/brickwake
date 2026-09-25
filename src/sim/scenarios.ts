@@ -112,6 +112,7 @@ export const scenarios = {
   burning: (() => {
     const start = createMatch({
       seed: 5,
+      weather: "clear",
       sea: seas.calm,
       wind: makeWind({ toward: -quarter, speed: 14, gustiness: 0 }),
       ships: [...solo, { id: dummyShipId, x: 0, z: 70, heading: 0, controls: { rudder: 0, sail: 0 } }],
