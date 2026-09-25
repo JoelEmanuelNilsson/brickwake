@@ -28,7 +28,7 @@ const sail = (state: MatchState, controls: ShipControls, seconds: number, each?:
 }
 
 const calmAt = (angleOffWind: number, wind = makeWind({ toward: windToward, speed: 14, gustiness: 0 })) =>
-  createMatch({ seed: 1, sea: seas.calm, wind, ships: [{ id, x: 0, z: 0, heading: Math.PI / 2 - angleOffWind }] })
+  createMatch({ seed: 1, weather: "clear", sea: seas.calm, wind, ships: [{ id, x: 0, z: 0, heading: Math.PI / 2 - angleOffWind }] })
 
 const withShip = (state: MatchState, change: Partial<ShipState>): MatchState => ({ ...state, ships: [{ ...ship(state), ...change }] })
 
@@ -226,6 +226,7 @@ describe("arena boundary", () => {
   test("a ship sailing straight out at full sail is held inside the arena", () => {
     const outward = createMatch({
       seed: 1,
+      weather: "clear",
       sea: seas.calm,
       wind: makeWind({ toward: windToward, speed: 14, gustiness: 0 }),
       ships: [{ id, x: 0, z: 450, heading: windToward }],
@@ -239,6 +240,7 @@ describe("arena boundary", () => {
   test("a ship held at the edge keeps steerage and turns back in", () => {
     const outward = createMatch({
       seed: 1,
+      weather: "clear",
       sea: seas.calm,
       wind: makeWind({ toward: windToward, speed: 14, gustiness: 0 }),
       ships: [{ id, x: 0, z: 450, heading: windToward }],
@@ -253,6 +255,7 @@ describe("arena boundary", () => {
   test("a drifting ship outside the arena is pushed back in", () => {
     const outside = createMatch({
       seed: 1,
+      weather: "clear",
       sea: seas.calm,
       wind: makeWind({ toward: windToward, speed: 14, gustiness: 0 }),
       ships: [{ id, x: 740, z: 0, heading: 0 }],

@@ -5,6 +5,7 @@ import type { MatchPhase } from "../sim/rules.ts"
 import { shipId, type ShipId, type ShipState } from "../sim/ship.ts"
 import { vec3, type Vec3 } from "../sim/vector.ts"
 import { scenarios, type ScenarioName } from "../sim/scenarios.ts"
+import { weatherNames } from "../sim/weather.ts"
 
 const isShipId = (u: unknown): u is ShipId => typeof u === "string" && u.length > 0 && u.length <= 32
 
@@ -15,6 +16,9 @@ const isScenarioName = (u: unknown): u is ScenarioName => typeof u === "string" 
 
 /** A scenario name on the wire (see `scenarios`). */
 export const ScenarioNameSchema = Schema.declare(isScenarioName, { expected: `one of ${Object.keys(scenarios).join(", ")}` })
+
+/** A match weather on the wire, as in `WeatherName`. */
+export const WeatherNameSchema = Schema.Literals(weatherNames)
 
 /** A 3-vector as `[x, y, z]`. */
 export const Vec3Tuple = Schema.Tuple([Schema.Finite, Schema.Finite, Schema.Finite])
@@ -203,6 +207,8 @@ export const ClientMessage = Schema.TaggedUnion({
     scenario: Schema.optionalKey(ScenarioNameSchema),
     /** With `scenario`: joins the private room of that scenario opened under this name while it has a free seat. */
     room: Schema.optionalKey(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(32))),
+    /** With `scenario`: the weather a newly opened room takes instead of the scenario's clear sky. */
+    weather: Schema.optionalKey(WeatherNameSchema),
   },
   leave: {},
   setHelm: { rudder: Schema.Literals([-1, 0, 1]) },
@@ -222,6 +228,7 @@ export const ServerMessage = Schema.TaggedUnion({
     simHz: Schema.Int,
     tick: Schema.Int,
     sea: SeaStateSchema,
+    weather: WeatherNameSchema,
     rules: MatchRulesSchema,
     phase: MatchPhaseSchema,
     teamSinks: TeamSinksSchema,

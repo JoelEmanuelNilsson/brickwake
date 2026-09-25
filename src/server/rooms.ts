@@ -10,12 +10,13 @@ import {
   type ServerEvent,
   type ServerMessage,
 } from "../protocol/messages.ts"
-import { addShip, balanceBots, createMatch, removeShip, spawnPoint, stepMatch, type BroadsideOrder, type MatchState } from "../sim/match.ts"
+import { addShip, balanceBots, changeWeather, createMatch, removeShip, spawnPoint, stepMatch, type BroadsideOrder, type MatchState } from "../sim/match.ts"
 import { seas } from "../sim/ocean.ts"
 import { ffaRules, tdmRules, type MatchMode } from "../sim/rules.ts"
 import { scenarios, scenarioSeats, type ScenarioName } from "../sim/scenarios.ts"
 import { shipId, type ShipControls, type ShipId } from "../sim/ship.ts"
 import { SIM_DT, SIM_HZ, tuning } from "../sim/tuning.ts"
+import type { WeatherName } from "../sim/weather.ts"
 import { makeWind } from "../sim/wind.ts"
 import { galleonClass } from "../sim/wreck.ts"
 
@@ -171,7 +172,7 @@ export const make = Effect.gen(function* () {
   const freeSeat = (room: Room, name: ScenarioName) =>
     scenarioSeats(name).find((id) => !room.members.has(id) && room.state.ships.some((ship) => ship.id === id))
 
-  const scenarioRoom = (name: ScenarioName, roomName: string | undefined) =>
+  const scenarioRoom = (name: ScenarioName, roomName: string | undefined, weather: WeatherName | undefined) =>
     Effect.gen(function* () {
       if (roomName !== undefined)
         for (const room of rooms.values()) {
@@ -179,7 +180,8 @@ export const make = Effect.gen(function* () {
           const seat = freeSeat(room, name)
           if (seat !== undefined) return { room, id: seat }
         }
-      const room = yield* openRoom(scenarios[name], { name, room: roomName })
+      const start = scenarios[name]
+      const room = yield* openRoom(weather === undefined ? start : changeWeather(start, weather), { name, room: roomName })
       const id = freeSeat(room, name)
       if (id === undefined) return yield* Effect.die(`scenario ${name} has no seat`)
       return { room, id }
@@ -225,7 +227,7 @@ export const make = Effect.gen(function* () {
               room.state = addShip(room.state, spawnPoint(room.state, id))
               return { room, id }
             })
-          : yield* scenarioRoom(request.scenario, request.room)
+          : yield* scenarioRoom(request.scenario, request.room, request.weather)
       room.members.set(id, send)
       room.events.push({ _tag: "shipJoined", tick: room.state.tick, shipId: id })
       rebalance(room)
@@ -236,6 +238,7 @@ export const make = Effect.gen(function* () {
           simHz: SIM_HZ,
           tick: room.state.tick,
           sea: room.state.sea,
+          weather: room.state.weather,
           rules: room.state.rules,
           phase: phaseSnapshot(room.state.phase),
           teamSinks: room.state.teamSinks,
