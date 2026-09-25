@@ -74,6 +74,7 @@ flowchart LR
 - [Gun decks you can see into](issues/20-open-gun-decks.md) — 3×9 ports, cannons inboard on carriages, deck interior; near 261k+4.5k rig, fleet 8.4 ms synced; 21.5 hits to sink; gun heights 1.38/3.46 m; open: oblique ref-04 angle, sunlit port slots, bots can drift past the arena edge (seed swap hid it).
 - [Destruction, gun effects and sinking sequence](issues/15-destruction-and-effects.md) — custom brick-debris solver (~1000 bodies in 1.1 ms), whole-mast falls with rig, full muzzle blast/smoke/splash, sinking with snapping masts and plunge vortex; 12-ship exchange p99 ≤ 6 ms CPU, 0 hitches; spray too bright; `bun run shot fx`.
 - [Visual polish](issues/22-visual-polish.md) — brick specular capped (no port-slot bloom), orange graded sky + cooled sea, own flash lights off in the gunport view, spray at white-brick brightness, interior sky fill for dark holes, debris/sail fixes; c5 5.0 ms; oblique ref-04 view deferred.
+- [Gameplay tuning and robustness](issues/21-gameplay-tuning.md) — arena drift was capsizing: heeled sails lose force, >75° sinks, edge is an inward current; bots 45 % hits; spread ±4.2 m in range at 224 m; slam 0.46 g; FFA 8 / TDM 15 sinks; deflate 45 KB/s; browser checks deterministic.
 
 ## Not yet specified
 
