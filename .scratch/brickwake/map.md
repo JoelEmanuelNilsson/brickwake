@@ -66,6 +66,7 @@ flowchart LR
 - [Galleon: masts, sails and rigging](issues/11-galleon-rig-and-sails.md) — three brick masts + cosmetic `ShipRig` (shader billow, furl 0/1/2, liveries); near 269k tris/40 draws; fleet 7.8 ms median; yards don't brace to the wind yet.
 - [Lab damage and breaks per hit](issues/12-lab-damage.md) — pure `ShipDamage.hit(point, dir)` → ordered removed indices; hull hit ≤ 12 parts/5 HP, upper works ≤ 6/2 HP, sails 0/1 HP; ~22 balls to sink; masts fall via graph; holed near LOD may exceed 300k tris with rig.
 - [Brick ships in the game and the premium scene](issues/13-brick-ships-in-game.md) — pooled `ShipView`s with rig, recoil, bracing yards; sky/fog/ACES/bloom, foam, wake, half-res soft smoke; 12-ship bot match 5.0 ms pipelined, 8.6 ms synced; sails read brown not black under sunset; sky near sun too creamy.
+- [Brick damage in the sim and network](issues/14-brick-damage-in-sim.md) — `ShipState.removedParts` ordered list; ballHit carries zone + removed; balls pass through holes; flooding built (waterline losses cut buoyancy, 3.5° list at 30 HP); 2.2 ms/tick with 144 balls; `bun run shot c6` late joiner.
 
 ## Not yet specified
 
