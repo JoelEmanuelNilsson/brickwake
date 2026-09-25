@@ -478,3 +478,46 @@ export const synthOpenSeaReverb = (sampleRate: number, seed: number): readonly [
   }
   return [make(seed), make(seed + 1)]
 }
+
+/** A fire burning on a ship: a low roar swelling and falling, a thin hiss, and the snap and pop of burning timber and pitch. 2.2 s. */
+export const synthFireCrackle = (sampleRate: number, seed: number): Float32Array => {
+  const random = seededRandom(seed)
+  const seconds = 2.2
+  const n = Math.round(seconds * sampleRate)
+  const out = new Float32Array(n)
+  const roar = normalizePeak(filtered(brownNoise(n, random), sampleRate, "lowpass", 380, 0.7), 1)
+  const hiss = normalizePeak(filtered(whiteNoise(n, random), sampleRate, "bandpass", 2600, 0.6), 1)
+  const swell = 0.6 + 0.4 * random()
+  for (let i = 0; i < n; i++) {
+    const t = i / sampleRate
+    const body = Math.min(1, t / 0.35) * Math.min(1, (seconds - t) / 0.7) * (0.75 + 0.25 * Math.sin(t * 5.1 * swell + seed))
+    out[i] = (roar[i] ?? 0) * 0.45 * body + (hiss[i] ?? 0) * 0.05 * body
+  }
+  for (let k = 0; k < 70; k++) {
+    const at = random() * (seconds - 0.1)
+    const snap = random() < 0.12
+    const frequency = snap ? 1200 + 2400 * random() : 700 + 3300 * random()
+    addMode(out, sampleRate, at, frequency, snap ? 0.006 : 0.0025 + 0.003 * random(), snap ? 0.9 : 0.15 + 0.3 * random())
+    if (snap) addMode(out, sampleRate, at, frequency * 0.43, 0.01, 0.4)
+  }
+  return fadeEdges(normalizePeak(saturate(normalizePeak(out, 1), 1.3), 0.85), sampleRate, 0.01, 0.3)
+}
+
+/** A fire catching: a rising whoosh of air drawn into the flame over a dull thump, with the first crackles. 1.3 s. */
+export const synthIgnite = (sampleRate: number, seed: number): Float32Array => {
+  const random = seededRandom(seed)
+  const seconds = 1.3
+  const n = Math.round(seconds * sampleRate)
+  const out = new Float32Array(n)
+  const noise = whiteNoise(n, random)
+  const sweep = new Biquad(sampleRate)
+  for (let i = 0; i < n; i++) {
+    const t = i / sampleRate
+    if (i % 32 === 0) sweep.set("bandpass", 250 + 1500 * (1 - Math.exp(-t / 0.25)), 0.8)
+    out[i] = sweep.step(noise[i] ?? 0) * (1 - Math.exp(-t / 0.07)) * Math.exp(-t / 0.4)
+  }
+  normalizePeak(out, 0.8)
+  addMode(out, sampleRate, 0, 58 + 10 * random(), 0.16, 0.7)
+  for (let k = 0; k < 16; k++) addMode(out, sampleRate, 0.15 + random() * 1, 900 + 3000 * random(), 0.003, 0.2 + 0.3 * random())
+  return fadeEdges(normalizePeak(saturate(normalizePeak(out, 1), 1.2), 0.9), sampleRate, 0.002, 0.2)
+}

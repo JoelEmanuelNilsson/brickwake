@@ -30,6 +30,17 @@ describe("sound bank", () => {
     expect(bandShare(bank.oneShots.hullThud[0]!, sampleRate, 0, 150)).toBeGreaterThan(0.8)
   })
 
+  test("a fire roars low under bright crackle; catching, it thumps and then whooshes up", () => {
+    for (const crackle of bank.oneShots.fireCrackle) {
+      expect(bandShare(crackle, sampleRate, 0, 500)).toBeGreaterThan(0.3)
+      expect(bandShare(crackle, sampleRate, 1000, 6000)).toBeGreaterThan(0.3)
+    }
+    for (const ignite of bank.oneShots.ignite) {
+      const thump = spectralCentroid(ignite.slice(0, sampleRate / 10), sampleRate)
+      expect(spectralCentroid(ignite.slice(sampleRate / 4, sampleRate / 2), sampleRate)).toBeGreaterThan(4 * thump)
+    }
+  })
+
   test("a whistle is loudest at its closest pass", () => {
     for (const whistle of bank.oneShots.whistle) {
       const env = envelopeFrames(whistle, sampleRate, 0.01)

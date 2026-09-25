@@ -24,6 +24,7 @@ import { MatchHud, type MatchReading } from "./match-hud.ts"
 import { OceanSurface } from "./ocean.ts"
 import { Reticle } from "./reticle.ts"
 import { RenderPipeline } from "./render-pipeline.ts"
+import { ShipFires } from "./ship-fires.ts"
 import { ShipView } from "./ship-view.ts"
 import { Wrecks } from "./wrecks.ts"
 import { SinkingShips } from "./sinking.ts"
@@ -116,6 +117,7 @@ export class Game {
     if (entry.seen === this.#frameCount) return
     this.scene.remove(entry.view.group)
     this.#debris.forget(entry.view)
+    this.#fires.forget(id)
     this.#spareViews.push(entry.view)
     this.#ships.delete(id)
   }
@@ -129,6 +131,7 @@ export class Game {
   readonly #hud: Hud
   readonly #matchHud: MatchHud
   readonly #hitIndicator: HitIndicator
+  readonly #fires: ShipFires
   readonly #sinking: SinkingShips
   readonly #debris: BrickDebris
   /** Hits that broke bricks this frame, thrown as debris once the ships are posed. */
@@ -255,6 +258,7 @@ export class Game {
     sun.shadow.normalBias = 0.03
     this.scene.add(sun, sun.target, new HemisphereLight(0xffc49a, 0x0b2a30, 1.1), this.#fill)
     this.effects = new Effects(this.scene, sunDirection)
+    this.#fires = new ShipFires(this.scene, this.effects, this.audio)
     this.#galleon = loadGalleon()
     this.#wrecks = new Wrecks(this.#galleon.graph)
     this.#debris = new BrickDebris(this.scene, this.#galleon, this.effects, this.audio)
@@ -592,6 +596,7 @@ export class Game {
     const viewportHeight = this.renderer.domElement.height
     const ships = timeline.ships()
     this.#wake.begin()
+    this.#fires.begin(dt)
     for (let i = 0; i < ships.length; i++) {
       const id = ships[i]?.id
       if (id === undefined) continue
@@ -614,6 +619,7 @@ export class Game {
         }
         entry.view.update(pose, windX, windZ, dt, camera.camera, viewportHeight)
         entry.view.group.visible = this.#sinking.update(id, entry.view, dt, renderTime, ocean.sea, camera)
+        this.#fires.update(id, pose, dt, renderTime, ocean.sea, camera.camera, windX, windZ)
         if (pose.life === "afloat") {
           const forwardX = 1 - 2 * (pose.qy * pose.qy + pose.qz * pose.qz)
           const forwardZ = 2 * (pose.qx * pose.qz - pose.qw * pose.qy)
@@ -623,6 +629,7 @@ export class Game {
       }
     }
     this.#ships.forEach(this.#sweep)
+    this.#fires.end()
     for (const { hit, detached } of this.#strikes) {
       const view = this.#ships.get(hit.target)?.view
       const ball = this.#gunnery.balls.find(hit.ballId)

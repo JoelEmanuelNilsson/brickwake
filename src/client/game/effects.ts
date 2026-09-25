@@ -99,6 +99,31 @@ const flashTexture = () =>
     ])
   })
 
+/** A tongue of flame pointing up the texture: a hot, rounded base narrowing to a wavering tip. */
+const flameTexture = () =>
+  canvasTexture((g) => {
+    const c = size / 2
+    for (let i = 0; i < 18; i++) {
+      const t = i / 17
+      radial(g, c + (Math.random() * 2 - 1) * size * 0.05 * t, size * (0.7 - 0.56 * t), size * (0.21 * (1 - t) + 0.05), [
+        [0, `rgba(255,255,255,${(0.55 - 0.3 * t).toFixed(2)})`],
+        [0.6, `rgba(255,255,255,${(0.25 - 0.15 * t).toFixed(2)})`],
+        [1, "rgba(255,255,255,0)"],
+      ])
+    }
+  })
+
+/** A thin bright ring, for the shock front of a blast. */
+const ringTexture = () =>
+  canvasTexture((g) =>
+    radial(g, size / 2, size / 2, size / 2, [
+      [0, "rgba(255,255,255,0)"],
+      [0.62, "rgba(255,255,255,0.04)"],
+      [0.84, "rgba(255,255,255,0.9)"],
+      [1, "rgba(255,255,255,0)"],
+    ]),
+  )
+
 const dotTexture = () =>
   canvasTexture((g) =>
     radial(g, size / 2, size / 2, size / 2, [
@@ -144,8 +169,8 @@ const dustColor = [0.5, 0.43, 0.34] as const
 
 /**
  * Gun and impact effects: muzzle flash with light, lingering wind-drifted smoke, water splashes sized by impact,
- * brick chips and splinters on hits, ball trails. Every layer is a fixed pool; nothing allocates per frame.
- * Later effects (debris physics, sinking) add layers and recipes here.
+ * explosions and splinters on hits, ball trails, burning ships' flames, embers and smoke columns. Every layer is a
+ * fixed pool; nothing allocates per frame. Later effects (debris physics, sinking) add layers and recipes here.
  */
 export class Effects {
   readonly smoke: ParticleLayer
@@ -154,6 +179,10 @@ export class Effects {
   readonly fire: ParticleLayer
   readonly sparks: ParticleLayer
   readonly foam: ParticleLayer
+  /** Tongues of flame on burning ships, the thick black smoke they send up, and blast shock fronts. */
+  readonly flames: ParticleLayer
+  readonly plume: ParticleLayer
+  readonly shock: ParticleLayer
   readonly chips: ChipLayer
   readonly #layers: ReadonlyArray<ParticleLayer>
   readonly #lights: ReadonlyArray<PointLight>
@@ -190,9 +219,13 @@ export class Effects {
     this.fire = new ParticleLayer({ ...hot, capacity: 512, texture: flashTexture(), fadeOut: 1.6, endTint: [0.55, 0.22, 0.06] }, sunDirection)
     this.sparks = new ParticleLayer({ ...hot, capacity: 1024, texture: dot, fadeOut: 1.2, endTint: [0.7, 0.25, 0.05], streak: 0.012, water: "vanish", soft: 0.1 }, sunDirection)
     this.foam = new ParticleLayer({ ...base, capacity: 768, texture: foamTexture(), brightness: 0.5, lit: false, sorted: false, fadeIn: 0.05, fadeOut: 1.6, water: "ride", soft: 0.3, softLift: 0.6 }, sunDirection)
-    this.chips = new ChipLayer(512)
+    this.flames = new ParticleLayer({ ...hot, capacity: 2048, texture: flameTexture(), fadeIn: 0.12, fadeOut: 1.3, endTint: [0.6, 0.2, 0.05], soft: 0.4 }, sunDirection)
+    this.shock = new ParticleLayer({ ...hot, capacity: 64, texture: ringTexture(), fadeOut: 1.5, soft: 0.5 }, sunDirection)
+    // Fire smoke has its own pool, so a burning fleet never takes the gun smoke's particles.
+    this.plume = new ParticleLayer({ ...base, capacity: 4096, texture: puff, soft: 3, fadeIn: 0.06, fadeOut: 1.2, shade: [0.2, 0.2, 0.24] }, sunDirection)
+    this.chips = new ChipLayer(640)
     this.chips.onWater = (x, y, z, speed) => this.plop(x, y, z, speed)
-    this.#layers = [this.foam, this.smoke, this.spray, this.droplets, this.fire, this.sparks]
+    this.#layers = [this.foam, this.plume, this.smoke, this.spray, this.droplets, this.fire, this.flames, this.shock, this.sparks]
     for (const layer of this.#layers) scene.add(layer.mesh)
     scene.add(this.chips.mesh)
     this.#lights = Array.from({ length: lightCount }, () => {
@@ -208,8 +241,11 @@ export class Effects {
   }
 
   /** Live particles per layer and chips, for the debug hook. */
-  counts(): Record<"smoke" | "spray" | "droplets" | "fire" | "sparks" | "foam" | "chips", number> {
+  counts(): Record<"smoke" | "spray" | "droplets" | "fire" | "sparks" | "foam" | "flames" | "plume" | "shock" | "chips", number> {
     return {
+      flames: this.flames.count,
+      plume: this.plume.count,
+      shock: this.shock.count,
       smoke: this.smoke.count,
       spray: this.spray.count,
       droplets: this.droplets.count,
@@ -463,29 +499,37 @@ export class Effects {
   }
 
   /**
-   * A ball strikes a hull at (x, y, z) travelling along unit (dx, dy, dz): an ember flash with light, a burst of brick
-   * chips and splinters, sparks and a dust puff. The whole bricks it knocks out are `BrickDebris`.
+   * A ball strikes a hull at (x, y, z) travelling along unit (dx, dy, dz): a white-hot flash with light, a fireball
+   * rolling back out of the hole, a shock front, brick chips, splinters and sparks, and dust and smoke that hang in the
+   * air. The whole bricks it knocks out are `BrickDebris`.
    */
   hit(x: number, y: number, z: number, dx: number, dy: number, dz: number): void {
     const p = this.#p
     const c = this.#c
     this.#at(x - dx * 0.5, y - dy * 0.5, z - dz * 0.5)
-    this.#look(0, 0, 0, 3.2, 4.5, 0.08, 7, 4.6, 2.4, 1)
+    this.#look(0, 0, 0, 4, 7, 0.09, 10, 7.5, 5, 1)
+    p.rotation = Math.random() * Math.PI * 2
     this.fire.emit(p)
-    for (let i = 0; i < 5; i++) {
-      this.#at(x - dx * 0.8 + jitter(0.6), y + jitter(0.6), z - dz * 0.8 + jitter(0.6))
-      this.#look(-dx * random(1, 4) + jitter(1.5), random(0.5, 2.5), -dz * random(1, 4) + jitter(1.5), random(0.8, 1.4), random(1.6, 2.6), random(0.18, 0.32), 5.5, 2.2, 0.5, 0.9)
+    for (let i = 0; i < 8; i++) {
+      this.#at(x - dx * 0.8 + jitter(0.5), y + jitter(0.5), z - dz * 0.8 + jitter(0.5))
+      const speed = random(2, 7)
+      this.#look(-dx * speed + jitter(3), random(0.5, 3.5), -dz * speed + jitter(3), random(1, 1.6), random(3, 5), random(0.28, 0.5), 6, 2.6, 0.6, 0.9)
+      p.drag = 3
+      p.gravity = -2
       p.rotation = Math.random() * Math.PI * 2
       this.fire.emit(p)
     }
-    this.flash(x - dx * 3, y + 1, z - dz * 3, 0.2)
-    for (let i = 0; i < 12; i++) {
+    this.#at(x - dx * 0.6, y - dy * 0.6, z - dz * 0.6)
+    this.#look(0, 0, 0, 1, 16, 0.22, 1.8, 1.5, 1.2, 0.55)
+    this.shock.emit(p)
+    this.flash(x - dx * 2, y + 0.5, z - dz * 2, 0.7)
+    for (let i = 0; i < 14; i++) {
       c.x = x + jitter(0.4)
       c.y = y + jitter(0.4)
       c.z = z + jitter(0.4)
-      const back = random(2, 9)
+      const back = random(2, 10)
       c.vx = -dx * back + jitter(5)
-      c.vy = random(3, 10)
+      c.vy = random(3, 11)
       c.vz = -dz * back + jitter(5)
       const brick = Math.random() < 0.5
       c.sx = brick ? 0.2 : 0.14
@@ -495,25 +539,25 @@ export class Effects {
       c.life = random(4, 8)
       this.chips.throw(c)
     }
-    for (let i = 0; i < 18; i++) {
+    for (let i = 0; i < 26; i++) {
       c.x = x
       c.y = y
       c.z = z
-      const speed = random(4, 16)
-      c.vx = -dx * speed + jitter(6)
-      c.vy = random(2, 9)
-      c.vz = -dz * speed + jitter(6)
+      const speed = random(4, 18)
+      c.vx = -dx * speed + jitter(7)
+      c.vy = random(2, 10)
+      c.vz = -dz * speed + jitter(7)
       c.sx = 0.07
       c.sy = 0.07
-      c.sz = random(0.6, 1.6)
+      c.sz = random(0.6, 1.8)
       c.color.copy(splinterColor)
       c.life = random(3, 6)
       this.chips.throw(c)
     }
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 20; i++) {
       this.#at(x, y, z)
-      const speed = random(8, 25)
-      this.#look(-dx * speed + jitter(8), random(1, 8), -dz * speed + jitter(8), 0.1, 0.05, random(0.2, 0.5), 7, 4, 1.5, 1)
+      const speed = random(8, 28)
+      this.#look(-dx * speed + jitter(9), random(1, 9), -dz * speed + jitter(9), 0.1, 0.05, random(0.25, 0.7), 7, 4, 1.5, 1)
       p.gravity = 9.81
       p.shape = ParticleShape.streak
       this.sparks.emit(p)
@@ -524,6 +568,148 @@ export class Effects {
       this.#drift(1.6, 0.8, -0.2)
       this.smoke.emit(p)
     }
+    // Powder smoke from the blast that hangs over the hole and drifts off.
+    for (let i = 0; i < 4; i++) {
+      this.#at(x - dx * 1.5 + jitter(0.8), y + random(0, 1), z - dz * 1.5 + jitter(0.8))
+      const tone = random(0.16, 0.26)
+      this.#look(-dx * random(1, 3) + jitter(1), random(1, 2.5), -dz * random(1, 3) + jitter(1), random(1.5, 2.2), random(8, 12), random(8, 12), tone, tone * 0.96, tone * 0.92, 0.7)
+      this.#drift(0.8, 0.7, -0.5)
+      this.plume.emit(p)
+    }
+  }
+
+  /**
+   * A powder explosion of `size` (1: a ship's magazine going up as it founders) at (x, y, z): a blinding flash and
+   * light, a fireball that swells and rolls upward, shock fronts in the air and on the water, a storm of sparks, chips
+   * and splinters, and a black mushroom of smoke that hangs for half a minute.
+   */
+  explode(x: number, y: number, z: number, water: number, size: number): void {
+    const p = this.#p
+    const c = this.#c
+    this.flash(x, y + 2, z, 3 * size)
+    this.#at(x, y + 1, z)
+    this.#look(0, 0, 0, 8 * size, 16 * size, 0.14, 12, 9, 6, 1)
+    this.fire.emit(p)
+    for (let i = 0; i < 24; i++) {
+      const a = Math.random() * Math.PI * 2
+      const up = random(-0.2, 1)
+      const speed = random(5, 16) * size
+      this.#at(x + jitter(1.5), y + random(0, 2), z + jitter(1.5))
+      this.#look(Math.cos(a) * speed * (1 - up * 0.5), up * speed + 2, Math.sin(a) * speed * (1 - up * 0.5), random(2.5, 4) * size, random(6, 10) * size, random(0.5, 1.1), 7, 2.8, 0.6, 0.95)
+      p.drag = 3.5
+      p.gravity = -4
+      p.rotation = Math.random() * Math.PI * 2
+      this.fire.emit(p)
+    }
+    for (let i = 0; i < 2; i++) {
+      this.#at(x, y + 1, z)
+      this.#look(0, 0, 0, 2 * size, (30 + 20 * i) * size, 0.3 + 0.15 * i, 2, 1.7, 1.3, 0.6)
+      this.shock.emit(p)
+    }
+    this.#at(x, water, z)
+    this.#look(0, 0, 0, 4 * size, 34 * size, 2.5, 0.95, 0.98, 1, 0.8)
+    p.shape = ParticleShape.flat
+    p.rotation = Math.random() * Math.PI * 2
+    this.foam.emit(p)
+    for (let i = 0; i < 40; i++) {
+      this.#at(x, y + 1, z)
+      const a = Math.random() * Math.PI * 2
+      const speed = random(10, 35) * size
+      this.#look(Math.cos(a) * speed, random(4, 22) * size, Math.sin(a) * speed, 0.14, 0.06, random(0.8, 2), 8, 3.8, 1, 1)
+      p.gravity = 9.81
+      p.drag = 0.5
+      p.shape = ParticleShape.streak
+      this.sparks.emit(p)
+    }
+    for (let i = 0; i < 36; i++) {
+      c.x = x + jitter(2)
+      c.y = y + random(0, 2)
+      c.z = z + jitter(2)
+      const a = Math.random() * Math.PI * 2
+      const speed = random(4, 20) * size
+      c.vx = Math.cos(a) * speed
+      c.vy = random(6, 20) * size
+      c.vz = Math.sin(a) * speed
+      const plank = i % 3 === 0
+      c.sx = plank ? 0.12 : 0.2
+      c.sy = plank ? 0.08 : 0.16
+      c.sz = plank ? random(0.8, 2.2) : 0.3
+      c.color.copy(plank ? splinterColor : (chipColors[i % chipColors.length] ?? splinterColor))
+      c.life = random(5, 9)
+      this.chips.throw(c)
+    }
+    for (let i = 0; i < 14; i++) {
+      const rise = i / 13
+      this.#at(x + jitter(2), y + 1 + rise * 3, z + jitter(2))
+      const tone = random(0.05, 0.12)
+      this.#look(jitter(2), (5 + 9 * rise) * size, jitter(2), random(3, 5) * size, random(16, 24) * size, random(16, 24), tone, tone * 0.95, tone * 0.9, 0.85)
+      this.#drift(0.35, 0.6, -0.6)
+      this.plume.emit(p)
+    }
+  }
+
+  /**
+   * One tongue of flame from a fire at (x, y, z) on a ship moving at (vx, vy, vz), with its glow and now and then an
+   * ember. `lean` turns it on screen (radians, toward the apparent wind); `k` 0–1 is the fire's strength.
+   */
+  flame(x: number, y: number, z: number, vx: number, vy: number, vz: number, lean: number, k: number): void {
+    const p = this.#p
+    this.#at(x + jitter(0.9), y + random(-0.2, 0.4), z + jitter(0.9))
+    const grow = random(0.75, 1.3) * (0.45 + 0.55 * k)
+    const hot = random(0.75, 1.25)
+    // Each tongue leaves the fire broad and yellow and shrinks as it climbs and reddens: together they taper into flame.
+    this.#look(vx + jitter(0.4), vy + random(1.5, 3), vz + jitter(0.4), 3.4 * grow, 1 * grow, random(0.5, 0.9), 1.5 * hot, 0.62 * hot, 0.16 * hot, 0.7)
+    p.gravity = -6
+    p.rotation = lean + jitter(0.2)
+    p.spin = jitter(0.4)
+    this.flames.emit(p)
+    if (Math.random() < 0.3) {
+      this.#at(x, y + 0.3, z)
+      this.#look(vx, vy + 0.5, vz, 3 * grow, 3.8 * grow, random(0.18, 0.3), 1.1, 0.4, 0.1, 0.4 * k)
+      p.rotation = Math.random() * Math.PI * 2
+      this.fire.emit(p)
+    }
+    if (Math.random() < 0.25 * k) this.ember(x, y + 0.6, z, vx, vy, vz)
+  }
+
+  /** An ember from a fire at (x, y, z) on a ship moving at (vx, vy, vz): it rides the fire's heat up, then drifts downwind and falls. */
+  ember(x: number, y: number, z: number, vx: number, vy: number, vz: number): void {
+    const p = this.#p
+    this.#at(x + jitter(0.4), y, z + jitter(0.4))
+    this.#look(vx * 0.8 + jitter(1.5), vy + random(3, 8), vz * 0.8 + jitter(1.5), random(0.07, 0.12), 0.04, random(1.4, 3), 9, 3.6, 0.9, 1)
+    p.drag = 0.7
+    p.windShare = 0.9
+    p.gravity = 1.5
+    p.shape = ParticleShape.streak
+    this.sparks.emit(p)
+  }
+
+  /**
+   * A puff of the thick black smoke a fire at (x, y, z) sends up: it climbs, swells and leans over downwind into a long
+   * column readable from across the arena. `scale` above 1 draws far fires with fewer, bigger puffs.
+   */
+  fireSmoke(x: number, y: number, z: number, vx: number, vz: number, k: number, scale: number): void {
+    const p = this.#p
+    const tone = random(0.045, 0.1)
+    this.#at(x + jitter(0.5), y + random(1, 2), z + jitter(0.5))
+    this.#look(vx * 0.5 + jitter(0.5), random(3.5, 6), vz * 0.5 + jitter(0.5), random(2.2, 3.2) * scale, random(17, 25) * scale * (0.6 + 0.4 * k), random(13, 18), tone, tone * 0.94, tone * 0.88, (0.5 + 0.25 * k) * Math.min(1, 0.7 + 0.3 * scale))
+    this.#drift(0.28, 0.72, -1.1)
+    this.plume.emit(p)
+  }
+
+  /** A fire catches at (x, y, z) on a ship moving at (vx, vy, vz): a whoosh of flame, a shower of sparks and a dark gout. */
+  ignite(x: number, y: number, z: number, vx: number, vy: number, vz: number): void {
+    const p = this.#p
+    for (let i = 0; i < 10; i++) {
+      this.#at(x + jitter(0.8), y + random(0, 0.8), z + jitter(0.8))
+      const grow = random(1, 1.6)
+      this.#look(vx + jitter(1.5), vy + random(2, 5), vz + jitter(1.5), 1.4 * grow, 3.4 * grow, random(0.4, 0.8), 6, 2.6, 0.6, 0.9)
+      p.rotation = jitter(0.3)
+      this.flames.emit(p)
+    }
+    for (let i = 0; i < 12; i++) this.ember(x, y + 0.5, z, vx, vy, vz)
+    this.flash(x, y + 1, z, 0.35)
+    for (let i = 0; i < 2; i++) this.fireSmoke(x, y, z, vx, vz, 1, 1.2)
   }
 
   /**

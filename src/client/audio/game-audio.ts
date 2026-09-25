@@ -37,6 +37,8 @@ const mix = {
   plunge: { level: 1, reach: 45 },
   fuse: { level: 0.3, reach: 10 },
   bell: { level: 0.35, reach: Number.POSITIVE_INFINITY },
+  fireCrackle: { level: 0.4, reach: 18 },
+  ignite: { level: 0.6, reach: 25 },
 } as const
 
 /** Share of each sound sent to both ears unpanned: a hard-panned sound still reaches the far ear, as it does outdoors. */
@@ -312,6 +314,16 @@ export class GameAudio {
     this.#play("plunge", x, y, z, mix.plunge.level, mix.plunge.reach, 0.9 + 0.2 * Math.random(), 0, 0)
   }
 
+  /** A burst of crackle and roar from a fire burning at (x, y, z); fires call it as a random stream. */
+  fireCrackle(x: number, y: number, z: number): void {
+    this.#play("fireCrackle", x, y, z, mix.fireCrackle.level * (0.7 + 0.5 * Math.random()), mix.fireCrackle.reach, 0.85 + 0.3 * Math.random(), 0, 0)
+  }
+
+  /** A fire catches at (x, y, z) with a whoosh. */
+  ignite(x: number, y: number, z: number): void {
+    this.#play("ignite", x, y, z, mix.ignite.level, mix.ignite.reach, 0.9 + 0.2 * Math.random(), 0, 0)
+  }
+
   /** The ship's bell struck `strikes` times in pairs, as on watch: marks battle start and end. */
   bell(strikes: number): void {
     for (let i = 0; i < strikes; i++) {
@@ -479,6 +491,8 @@ const buildSoundGraph = (c: BaseAudioContext, bank: SoundBank, masterGain: numbe
     plunge: one.plunge.map(toBuffer),
     fuse: one.fuse.map(toBuffer),
     bell: one.bell.map(toBuffer),
+    fireCrackle: one.fireCrackle.map(toBuffer),
+    ignite: one.ignite.map(toBuffer),
   }
   const reverb = c.createBuffer(2, bank.reverb[0].length, bank.sampleRate)
   reverb.getChannelData(0).set(bank.reverb[0])

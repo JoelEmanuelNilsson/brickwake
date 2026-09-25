@@ -14,6 +14,7 @@ import type { ShipPose } from "./timeline.ts"
 const founderHz = 14
 /** Ship-local deck points the smoke and churn come from, bow to stern. */
 const deckPoints = [-11, -6, -1, 4, 9].map((x) => new Vector3(x, 2.6, 0))
+const breachPoints = [deckPoints[0]!, deckPoints[4]!]
 /** Seconds after going under that a sunk hull stops being drawn: the sea hides it well before. */
 const drawnSunkSeconds = 1.5
 const { plungeAt } = tuning.sinking
@@ -37,9 +38,8 @@ const railZ = 3.8
 const vortexSeconds = 5
 const vortexHz = 6
 const flotsamParts = 36
-/** HP share below which a ship smokes from its holes, and above `burningFrom` of the smoke's intensity it burns. */
+/** HP share below which a ship smokes from its holes; its flames are the sim's fires (`ShipFires`) until it founders. */
 const smokeBelow = 0.55
-const burningFrom = 0.45
 /** Smoke puffs per second from each hole at full intensity, and seconds before a smoking ship picks fresh holes. */
 const smokeHz = 6
 const smokeRefreshSeconds = 9
@@ -70,8 +70,8 @@ interface Smoulder {
 }
 
 /**
- * Plays a ship's damage and foundering on top of the sim's physical sinking. A battered ship smokes from its holes and
- * burns when near sinking. When it founders, it settles and lists as it floods: the sea pours over the low rail and
+ * Plays a ship's damage and foundering on top of the sim's physical sinking. A battered ship smokes from its holes.
+ * When it founders, its magazine goes up; it settles and lists as it floods: the sea pours over the low rail and
  * churns along the side, bricks and planks break loose and float, masts crack and give way a moment later, air bursts
  * out. Then the flooding end goes and the far end lifts, and it plunges in a heave of spray, a boil of air and a whirl
  * of foam and flotsam. Says when a sunk hull may stop being drawn.
@@ -125,7 +125,7 @@ export class SinkingShips {
         plunge: new Vector3(),
       }
       this.#foundering.set(id, f)
-      if (pose.life === "sinking") this.#breach(pose, camera)
+      if (pose.life === "sinking") this.#breach(pose, sea, renderTime, camera)
     }
     f.life = pose.life
     const since = pose.life === "sinking" ? renderTime - pose.lifeTime : renderTime - (pose.lifeTime - tuning.sinking.respawnSeconds) + tuning.sinking.seconds
@@ -238,7 +238,7 @@ export class SinkingShips {
       s = { holes: new Int32Array(3).fill(-1), clock: 0, refreshAt: 0 }
       this.#smoulder.set(id, s)
     }
-    const burning = intensity > burningFrom || pose.life === "sinking"
+    const burning = pose.life === "sinking"
     const holes = 1 + Math.min(2, Math.floor(Math.max(0, intensity) * 3))
     if (renderTime >= s.refreshAt) {
       s.refreshAt = renderTime + smokeRefreshSeconds
@@ -316,16 +316,18 @@ export class SinkingShips {
     f.toppleAt = since + toppleDelay.min + Math.random() * (toppleDelay.max - toppleDelay.min)
   }
 
-  /** The moment a ship's HP runs out: the hull splits with fire, splinters and a gout of smoke. */
-  #breach(pose: ShipPose, camera: ChaseCamera) {
+  /** The moment a ship's HP runs out: the magazine goes up amidships and the hull splits fore and aft with fire and splinters. */
+  #breach(pose: ShipPose, sea: SeaState, renderTime: number, camera: ChaseCamera) {
     this.#q.set(pose.qx, pose.qy, pose.qz, pose.qw)
-    for (const local of deckPoints) {
+    for (const local of breachPoints) {
       const point = this.#world(pose, local)
       this.#effects.hit(point.x, point.y - 1, point.z, 0, -1, 0)
     }
     const middle = this.#world(pose, deckPoints[2]!)
+    this.#effects.explode(middle.x, middle.y, middle.z, oceanHeight(sea, middle.x, middle.z, renderTime), 1)
     this.#audio.sinking(middle.x, middle.y, middle.z)
-    this.#shake(camera, middle, 0.6, 70)
+    this.#audio.cannon(middle.x, middle.y, middle.z, 0)
+    this.#shake(camera, middle, 0.8, 80)
   }
 
   /** Take `parts` and everything only they held off the drawn ship and throw them as debris toward (dx, dz). */

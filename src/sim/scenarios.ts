@@ -1,9 +1,11 @@
 import { drawBotSkill, type Bot } from "./bots.ts"
+import { catchFire } from "./fire.ts"
 import { balanceBots, createMatch, type MatchState, type ShipSpawn } from "./match.ts"
 import { ffaRules, tdmRules, type MatchRules } from "./rules.ts"
 import { seas, swell } from "./ocean.ts"
 import { shipId, type ShipId } from "./ship.ts"
 import { tuning } from "./tuning.ts"
+import { vec3 } from "./vector.ts"
 import { makeWind } from "./wind.ts"
 
 /** The ship every single-ship scenario spawns, at the origin heading +x. */
@@ -100,6 +102,21 @@ export const scenarios = {
    * to three; 30 s of results, so a test sinks the target and reads the results screen.
    */
   skirmish: { ...skirmish, ships: skirmish.ships.map((ship) => (ship.id === dummyShipId ? { ...ship, hp: duelBHp } : ship)) },
+  /** Both ships already burning, the dummy 70 m off the starboard beam: three fires along its near side, two on the player's starboard side. */
+  burning: (() => {
+    const start = createMatch({
+      seed: 5,
+      sea: seas.calm,
+      wind: makeWind({ toward: -quarter, speed: 14, gustiness: 0 }),
+      ships: [...solo, { id: dummyShipId, x: 0, z: 70, heading: 0, controls: { rudder: 0, sail: 0 } }],
+      rules: practice,
+    })
+    const fires = {
+      [scenarioShipId]: [catchFire(vec3(-5, 2, 3.8), dummyShipId, 0), catchFire(vec3(6, 3, 3.6), dummyShipId, 0)],
+      [dummyShipId]: [catchFire(vec3(-8, 2, -3.8), scenarioShipId, 0), catchFire(vec3(1, 2.5, -3.8), scenarioShipId, 0), catchFire(vec3(9, 3, -3.4), scenarioShipId, 0)],
+    }
+    return { ...start, ships: start.ships.map((ship) => ({ ...ship, hp: 180, fires: fires[ship.id] ?? [] })) }
+  })(),
 } as const satisfies Record<string, MatchState>
 
 /** A scenario name. */
