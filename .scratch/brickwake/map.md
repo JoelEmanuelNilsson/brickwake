@@ -64,6 +64,7 @@ flowchart LR
 - [Audio](issues/16-audio.md) — `src/client/audio/`, sounds synthesized in a worker at load, positional with speed-of-sound delay, compressor+limiter; `/sound.html` test page; `game.audio.hullHit/sinking/plunge` for 15; mix table for 19.
 - [Bots](issues/07-bots.md) — pure `src/sim/bots.ts`, 5 bots fill quick play; headless 8-min match in ~6 s with a winner; bots hit 65–72 % at 150 m (too deadly — tune `tuning.bots.skill.aimError` in 19); they wear rather than tack.
 - [Galleon: masts, sails and rigging](issues/11-galleon-rig-and-sails.md) — three brick masts + cosmetic `ShipRig` (shader billow, furl 0/1/2, liveries); near 269k tris/40 draws; fleet 7.8 ms median; yards don't brace to the wind yet.
+- [Lab damage and breaks per hit](issues/12-lab-damage.md) — pure `ShipDamage.hit(point, dir)` → ordered removed indices; hull hit ≤ 12 parts/5 HP, upper works ≤ 6/2 HP, sails 0/1 HP; ~22 balls to sink; masts fall via graph; holed near LOD may exceed 300k tris with rig.
 
 ## Not yet specified
 
