@@ -79,7 +79,7 @@ export const loadGalleon = (): GalleonModel => {
   const hullIndex = new Map<number, number>()
   const slots = new Array<PartSlot | undefined>(ship.parts.length)
   built.placements.forEach((placement, i) => {
-    const part = built.partIndex[i] ?? -1
+    const part = i // placements cover every part, in part order
     if (placement.part === cannonPart || isYard(placement)) {
       slots[part] = { mesh: "moving", index: moving.length }
       moving.push(placement)

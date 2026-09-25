@@ -65,6 +65,7 @@ flowchart LR
 - [Bots](issues/07-bots.md) — pure `src/sim/bots.ts`, 5 bots fill quick play; headless 8-min match in ~6 s with a winner; bots hit 65–72 % at 150 m (too deadly — tune `tuning.bots.skill.aimError` in 19); they wear rather than tack.
 - [Galleon: masts, sails and rigging](issues/11-galleon-rig-and-sails.md) — three brick masts + cosmetic `ShipRig` (shader billow, furl 0/1/2, liveries); near 269k tris/40 draws; fleet 7.8 ms median; yards don't brace to the wind yet.
 - [Lab damage and breaks per hit](issues/12-lab-damage.md) — pure `ShipDamage.hit(point, dir)` → ordered removed indices; hull hit ≤ 12 parts/5 HP, upper works ≤ 6/2 HP, sails 0/1 HP; ~22 balls to sink; masts fall via graph; holed near LOD may exceed 300k tris with rig.
+- [Brick ships in the game and the premium scene](issues/13-brick-ships-in-game.md) — pooled `ShipView`s with rig, recoil, bracing yards; sky/fog/ACES/bloom, foam, wake, half-res soft smoke; 12-ship bot match 5.0 ms pipelined, 8.6 ms synced; sails read brown not black under sunset; sky near sun too creamy.
 
 ## Not yet specified
 
