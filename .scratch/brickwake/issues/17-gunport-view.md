@@ -1,7 +1,7 @@
 # Gunport aim view
 
 Type: task
-Status: open
+Status: resolved
 Blocked by: 13
 
 ## Question
@@ -30,3 +30,5 @@ Not resolved. The view works: controls, transition, aim, firing and lighting. It
   - The only clear line of sight is from the tunnel mouth, and the lintel cuts it at +7°, so masts at 150 m are cut off.
   - The result reads as looking out through a deep port past the barrel, not as ref-04's deck.
 - **Fix, for the ship track or 19**: ports about 3 studs × 9 plates, no proud frame depth at the gun decks, and the cannon placed about 1 m further inboard, so the breech sits in the room and only the muzzle reaches the port. Then retune `sightPoint`/`eyeBack` and the look limits in `gunport-view.ts`; nothing else changes. This touches the generator, so it changes part indices, 12's sink count and 14's damage.
+
+Resolved by [Gun decks you can see into](20-open-gun-decks.md), which fixed the port size this ticket reported.
