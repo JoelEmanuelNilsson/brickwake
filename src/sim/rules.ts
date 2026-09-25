@@ -1,8 +1,8 @@
-import type { ShipId, ShipState } from "./ship.ts"
+import type { ShipId, ShipState, Team } from "./ship.ts"
 import { tuning } from "./tuning.ts"
 
-/** A game mode. Each mode decides who scores for a sink and who wins; the match lifecycle is shared. */
-export type MatchMode = "ffa"
+/** A game mode. Each mode decides sides, who scores for a sink and who wins; the match lifecycle is shared. */
+export type MatchMode = "ffa" | "tdm"
 
 /** How a match is paced and won. Times are sim seconds. */
 export interface MatchRules {
@@ -20,8 +20,23 @@ export interface MatchRules {
 /** Free-for-all quick play. */
 export const ffaRules: MatchRules = { mode: "ffa", ...tuning.match.ffa }
 
-/** Who won a match. TDM adds a team winner. */
-export type MatchWinner = { readonly _tag: "ship"; readonly shipId: ShipId }
+/** Team deathmatch quick play: Pirates vs Navy. */
+export const tdmRules: MatchRules = { mode: "tdm", ...tuning.match.tdm }
+
+/** Both TDM sides, pirates first. */
+export const teams: ReadonlyArray<Team> = ["pirates", "navy"]
+
+/** Sinks each TDM side has scored this match. Held apart from the ships so a side keeps its score when a ship leaves. */
+export interface TeamSinks {
+  readonly pirates: number
+  readonly navy: number
+}
+
+/** No sinks on either side. */
+export const noTeamSinks: TeamSinks = { pirates: 0, navy: 0 }
+
+/** Who won a match: a captain in FFA, a side in TDM. */
+export type MatchWinner = { readonly _tag: "ship"; readonly shipId: ShipId } | { readonly _tag: "team"; readonly team: Team }
 
 /** Where a match is in its lifecycle: warmup → playing → ended → warmup of the next match. Times are sim seconds. */
 export type MatchPhase =
@@ -34,42 +49,77 @@ export type MatchPhase =
 export const openingPhase = (rules: MatchRules, time: number): MatchPhase =>
   rules.warmupSeconds > 0 ? { _tag: "warmup", endsAt: time + rules.warmupSeconds } : { _tag: "playing", endsAt: time + rules.timeLimit }
 
+/**
+ * The side a joining ship takes: none in FFA; in TDM the side with fewer ships, on a tie the side with fewer captains
+ * (`isBot` false), since its bots make room for the next one; then pirates.
+ */
+export const teamFor = (rules: MatchRules, ships: ReadonlyArray<ShipState>, isBot: (id: ShipId) => boolean): Team | undefined => {
+  switch (rules.mode) {
+    case "ffa":
+      return undefined
+    case "tdm": {
+      const [pirates, navy] = teams.map((team) => ships.filter((ship) => ship.team === team))
+      const captains = (side: ReadonlyArray<ShipState>) => side.filter((ship) => !isBot(ship.id)).length
+      const lean = pirates!.length - navy!.length || captains(pirates!) - captains(navy!)
+      return lean <= 0 ? "pirates" : "navy"
+    }
+  }
+}
+
+/** True when two ships fight on the same side; never in FFA. Allies' balls strike each other for no damage. */
+export const allies = (a: ShipState, b: ShipState): boolean => a.team !== undefined && a.team === b.team
+
 const rank = (a: ShipState, b: ShipState) => b.kills - a.kills || a.deaths - b.deaths || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
 
 /** Ships best first: most sinks, then fewest deaths, then id. */
 export const standings = (ships: ReadonlyArray<ShipState>): ReadonlyArray<ShipState> => ships.toSorted(rank)
 
-/** Credits a sink of `victim` by `by` (undefined when no ship caused it). Returns the ships with scores updated. */
-export const scoreSink = (
-  rules: MatchRules,
-  ships: ReadonlyArray<ShipState>,
-  victim: ShipId,
-  by: ShipId | undefined,
-): ReadonlyArray<ShipState> => {
+/** The match score: every ship's own tally and each side's sinks. */
+export interface MatchScore {
+  readonly ships: ReadonlyArray<ShipState>
+  readonly teamSinks: TeamSinks
+}
+
+/** Credits a sink of `victim` by `by` (undefined when no ship caused it). An ally's sink credits nobody. */
+export const scoreSink = (rules: MatchRules, score: MatchScore, victim: ShipId, by: ShipId | undefined): MatchScore => {
+  const victimShip = score.ships.find((ship) => ship.id === victim)
+  const byShip = score.ships.find((ship) => ship.id === by)
+  const credited = byShip !== undefined && victimShip !== undefined && !allies(byShip, victimShip) ? byShip : undefined
+  const ships = score.ships.map((ship) =>
+    ship.id === victim ? { ...ship, deaths: ship.deaths + 1 } : ship.id === credited?.id ? { ...ship, kills: ship.kills + 1 } : ship,
+  )
   switch (rules.mode) {
     case "ffa":
-      return ships.map((ship) =>
-        ship.id === victim ? { ...ship, deaths: ship.deaths + 1 } : ship.id === by ? { ...ship, kills: ship.kills + 1 } : ship,
-      )
+      return { ships, teamSinks: score.teamSinks }
+    case "tdm": {
+      const team = credited?.team
+      return { ships, teamSinks: team === undefined ? score.teamSinks : { ...score.teamSinks, [team]: score.teamSinks[team] + 1 } }
+    }
   }
 }
 
 /** True once a side has reached the score limit. */
-export const scoreLimitReached = (rules: MatchRules, ships: ReadonlyArray<ShipState>): boolean => {
+export const scoreLimitReached = (rules: MatchRules, score: MatchScore): boolean => {
   switch (rules.mode) {
     case "ffa":
-      return ships.some((ship) => ship.kills >= rules.scoreLimit)
+      return score.ships.some((ship) => ship.kills >= rules.scoreLimit)
+    case "tdm":
+      return teams.some((team) => score.teamSinks[team] >= rules.scoreLimit)
   }
 }
 
-/** The winner as the ships stand: the one ranked strictly first by sinks, then fewest deaths; undefined on a tie. */
-export const winnerOf = (rules: MatchRules, ships: ReadonlyArray<ShipState>): MatchWinner | undefined => {
+/** The winner as the score stands: the captain or side strictly ahead (FFA breaks sink ties on fewest deaths); undefined on a tie. */
+export const winnerOf = (rules: MatchRules, score: MatchScore): MatchWinner | undefined => {
   switch (rules.mode) {
     case "ffa": {
-      const [first, second] = standings(ships)
+      const [first, second] = standings(score.ships)
       if (first === undefined) return undefined
       if (second !== undefined && second.kills === first.kills && second.deaths === first.deaths) return undefined
       return { _tag: "ship", shipId: first.id }
+    }
+    case "tdm": {
+      const { pirates, navy } = score.teamSinks
+      return pirates === navy ? undefined : { _tag: "team", team: pirates > navy ? "pirates" : "navy" }
     }
   }
 }

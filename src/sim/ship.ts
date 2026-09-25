@@ -54,6 +54,9 @@ export type ShipLife =
 const afloat: ShipLife = { _tag: "afloat" }
 const intact: ReadonlyArray<number> = []
 
+/** A TDM side. */
+export type Team = "pirates" | "navy"
+
 /**
  * One ship's rigid body and rig. Ship-local axes: +x bow, +y up, +z starboard; the origin is on the
  * centreline, midships, at the design waterline.
@@ -88,6 +91,12 @@ export interface ShipState {
    * that fell with them follow from the damage graph (`shipWreck`), so only this list is state and goes on the wire.
    */
   readonly removedParts: ReadonlyArray<number>
+  /** Balls this ship fired, balls of them that struck an enemy for damage, and the HP they took, this match. */
+  readonly shots: number
+  readonly hits: number
+  readonly damage: number
+  /** The ship's side in TDM; undefined in FFA, where every ship fights for itself. Kept across respawns. */
+  readonly team: Team | undefined
 }
 
 /** Heading, pitch and heel of a ship, in radians. */
@@ -110,7 +119,14 @@ export interface ShipEnvironment {
 
 /** A ship at rest with the given id, position (y is ignored; it starts on the water) and heading. */
 export const makeShip = (
-  options: { readonly id: ShipId; readonly x: number; readonly z: number; readonly heading: number; readonly controls?: ShipControls },
+  options: {
+    readonly id: ShipId
+    readonly x: number
+    readonly z: number
+    readonly heading: number
+    readonly controls?: ShipControls
+    readonly team?: Team | undefined
+  },
   sea: SeaState,
   time: number,
 ): ShipState => ({
@@ -129,6 +145,10 @@ export const makeShip = (
   kills: 0,
   deaths: 0,
   removedParts: intact,
+  shots: 0,
+  hits: 0,
+  damage: 0,
+  team: options.team,
 })
 
 /** Share of a buoyancy column at ship-local `x` still afloat at `time`: the flooding end loses it first, the far end last. */

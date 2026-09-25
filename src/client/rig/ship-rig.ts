@@ -6,6 +6,7 @@ import {
   Group,
   Mesh,
   MeshDepthMaterial,
+  MeshLambertMaterial,
   MeshStandardMaterial,
   Quaternion,
   RGBADepthPacking,
@@ -390,8 +391,8 @@ const scratchWind = new Vector3()
 export class ShipRig {
   readonly root = new Group()
   private readonly uniforms: RigUniforms
-  private readonly sailMaterial: MeshStandardMaterial
-  private readonly flagMaterial: MeshStandardMaterial
+  private readonly sailMaterial: MeshLambertMaterial
+  private readonly flagMaterial: MeshLambertMaterial
   private readonly depthMaterials: ReadonlyArray<MeshDepthMaterial>
   private readonly lineMaterial: MeshStandardMaterial
   private readonly sails: Mesh
@@ -405,10 +406,11 @@ export class ShipRig {
     this.geometry = geometry
     this.uniforms = { uTime: { value: 0 }, uWind: { value: new Vector3() }, uOpen: { value: 1 }, uShown: { value: new Array<number>(maxSails).fill(1) }, uBrace: { value: 0 } }
     const map = liveryAtlas(livery)
-    this.sailMaterial = new MeshStandardMaterial({ map, side: DoubleSide, roughness: 0.92, metalness: 0 })
+    // Lambert: cloth has no glossy lobe, and a GGX one under the low sun lifts black canvas to tan.
+    this.sailMaterial = new MeshLambertMaterial({ map, side: DoubleSide })
     this.sailMaterial.onBeforeCompile = shaped(sailChunk, "sailShape", this.uniforms, false)
     this.sailMaterial.customProgramCacheKey = () => "rig-sail"
-    this.flagMaterial = new MeshStandardMaterial({ map, side: DoubleSide, roughness: 0.9, metalness: 0 })
+    this.flagMaterial = new MeshLambertMaterial({ map, side: DoubleSide })
     this.flagMaterial.onBeforeCompile = shaped(flagChunk, "flagShape", this.uniforms, false)
     this.flagMaterial.customProgramCacheKey = () => "rig-flag"
     const sailDepth = new MeshDepthMaterial({ depthPacking: RGBADepthPacking, side: DoubleSide })

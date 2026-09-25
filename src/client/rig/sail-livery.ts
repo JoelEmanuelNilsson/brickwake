@@ -17,13 +17,14 @@ export interface SailLivery {
 /** Pirates: black canvas, white skull and crossbones on the main course, a jolly roger and red pennants. */
 export const pirateLivery: SailLivery = {
   name: "pirate",
-  cloth: "#2a2725",
-  emblem: { art: "skull", color: "#eceae4" },
+  // Near-black: the low sunset sun is bright enough that a grey-black cloth reads tan in game.
+  cloth: "#111112",
+  emblem: { art: "skull", color: "#f6f4ee" },
   flag: { field: "#131316", emblem: "#eceae4" },
   pennant: "#b3170c",
 }
 
-/** Navy, lion: white canvas with red edge bands and a red lion. */
+/** Navy, lion: white canvas with red edge bands and a black lion. */
 export const navyLionLivery: SailLivery = {
   name: "navy-lion",
   cloth: "#ece8dc",
@@ -33,11 +34,11 @@ export const navyLionLivery: SailLivery = {
   pennant: "#b3170c",
 }
 
-/** Navy, fleur-de-lis: blue canvas, a white centre panel with a blue fleur-de-lis. */
+/** Navy, fleur-de-lis: blue canvas, a white centre panel with a gold fleur-de-lis. */
 export const navyFleurLivery: SailLivery = {
   name: "navy-fleur",
   cloth: "#2a56b0",
-  emblem: { art: "fleur", color: "#1d3f86", backing: "#ece8dc" },
+  emblem: { art: "fleur", color: "#d9a21e", backing: "#ece8dc" },
   flag: { field: "#1d3f86", emblem: "#f2cd37" },
   pennant: "#ece8dc",
 }

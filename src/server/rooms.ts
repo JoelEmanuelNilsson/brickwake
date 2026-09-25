@@ -12,6 +12,7 @@ import {
 } from "../protocol/messages.ts"
 import { addShip, balanceBots, createMatch, removeShip, spawnPoint, stepMatch, type BroadsideOrder, type MatchState } from "../sim/match.ts"
 import { seas } from "../sim/ocean.ts"
+import { ffaRules, tdmRules, type MatchMode } from "../sim/rules.ts"
 import { scenarios, scenarioSeats, type ScenarioName } from "../sim/scenarios.ts"
 import { shipId, type ShipControls, type ShipId } from "../sim/ship.ts"
 import { SIM_DT, SIM_HZ, tuning } from "../sim/tuning.ts"
@@ -92,6 +93,7 @@ const stepRoom = (room: Room) => {
     _tag: "snapshot",
     tick: room.state.tick,
     phase: phaseSnapshot(room.state.phase),
+    teamSinks: room.state.teamSinks,
     wind: windSnapshot(room.state),
     ships: room.state.ships.map(shipSnapshot),
     events,
@@ -119,10 +121,11 @@ const runRoom = (room: Room) =>
     }
   })
 
-const quickPlayMatch = Effect.gen(function* () {
+const quickPlayMatch = Effect.fn("Rooms.quickPlayMatch")(function* (mode: MatchMode) {
   const seed = yield* Random.nextIntBetween(0, 2 ** 31)
   const toward = yield* Random.nextBetween(-Math.PI, Math.PI)
-  return createMatch({ seed, sea: seas.open, wind: makeWind({ toward, speed: 14, gustiness: 1 }), ships: [] })
+  const rules = mode === "tdm" ? tdmRules : ffaRules
+  return createMatch({ seed, rules, sea: seas.open, wind: makeWind({ toward, speed: 14, gustiness: 1 }), ships: [] })
 })
 
 /** Builds the registry; room loops run in the Layer's scope. */
@@ -155,12 +158,13 @@ export const make = Effect.gen(function* () {
       return room
     })
 
-  const quickPlayRoom = Effect.gen(function* () {
-    for (const room of rooms.values()) {
-      if (room.scenario === undefined && room.members.size < tuning.match.maxShips) return room
-    }
-    return yield* openRoom(yield* quickPlayMatch, undefined)
-  })
+  const quickPlayRoom = (mode: MatchMode) =>
+    Effect.gen(function* () {
+      for (const room of rooms.values()) {
+        if (room.scenario === undefined && room.state.rules.mode === mode && room.members.size < tuning.match.maxShips) return room
+      }
+      return yield* openRoom(yield* quickPlayMatch(mode), undefined)
+    })
 
   const freeSeat = (room: Room, name: ScenarioName) =>
     scenarioSeats(name).find((id) => !room.members.has(id) && room.state.ships.some((ship) => ship.id === id))
@@ -214,7 +218,7 @@ export const make = Effect.gen(function* () {
     function* (request: JoinRequest, send: Send) {
       const { room, id } =
         request.scenario === undefined
-          ? yield* Effect.map(quickPlayRoom, (room) => {
+          ? yield* Effect.map(quickPlayRoom(request.mode), (room) => {
               const id = shipId(`ship-${++room.shipsJoined}`)
               room.state = addShip(room.state, spawnPoint(room.state, id))
               return { room, id }
@@ -232,6 +236,7 @@ export const make = Effect.gen(function* () {
           sea: room.state.sea,
           rules: room.state.rules,
           phase: phaseSnapshot(room.state.phase),
+          teamSinks: room.state.teamSinks,
           wind: windSnapshot(room.state),
           ships: room.state.ships.map(shipSnapshot),
           wrecks: wreckSnapshots(room.state),

@@ -1,5 +1,5 @@
 import { balanceBots, createMatch, type MatchState } from "./match.ts"
-import { ffaRules, type MatchRules } from "./rules.ts"
+import { ffaRules, tdmRules, type MatchRules } from "./rules.ts"
 import { seas, swell } from "./ocean.ts"
 import { shipId, type ShipId } from "./ship.ts"
 import { tuning } from "./tuning.ts"
@@ -32,6 +32,19 @@ const duel = createMatch({
   ],
 })
 
+const skirmish = balanceBots(
+  createMatch({
+    seed: 8,
+    rules: { ...tdmRules, warmupSeconds: 0, scoreLimit: 1, timeLimit: 120, endedSeconds: 30 },
+    sea: seas.calm,
+    wind: makeWind({ toward: -quarter, speed: 14, gustiness: 0 }),
+    ships: [
+      { ...solo[0], team: "pirates" },
+      { id: dummyShipId, x: 0, z: 150, heading: 0, team: "navy" },
+    ],
+  }),
+)
+
 /**
  * Named start states, usable from tests and as `?scenario=<name>` in the browser. The ship heads +x,
  * sails furled, with the wind from port (blowing toward +z): a beam reach once sail is set.
@@ -60,6 +73,11 @@ export const scenarios = {
   /** A full room: the player at the arena centre and bots on the spawn ring filling it to the most ships a room holds. */
   armada: balanceBots(createMatch({ seed: 7, sea: seas.open, wind: makeWind({ toward: -quarter, speed: 14, gustiness: 1 }), ships: solo, rules: practice }), tuning.match.maxShips),
   duel: { ...duel, ships: duel.ships.map((ship) => (ship.id === duelShipIds[1] ? { ...ship, hp: duelBHp } : ship)) },
+  /**
+   * TDM to one sink: the player (pirates) with a navy ship 150 m off the starboard beam at 15 HP, bots filling both sides
+   * to three; 30 s of results, so a test sinks the target and reads the results screen.
+   */
+  skirmish: { ...skirmish, ships: skirmish.ships.map((ship) => (ship.id === dummyShipId ? { ...ship, hp: duelBHp } : ship)) },
 } as const satisfies Record<string, MatchState>
 
 /** A scenario name. */

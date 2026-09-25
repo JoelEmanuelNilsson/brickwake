@@ -29,6 +29,10 @@ export class ShipPose {
   spawn = 0
   kills = 0
   deaths = 0
+  shots = 0
+  hits = 0
+  damage = 0
+  team: ShipSnapshot["team"] = null
 }
 
 interface Entry {
@@ -156,6 +160,10 @@ const write = (out: ShipPose, a: ShipSnapshot, b: ShipSnapshot, u: number) => {
   out.spawn = b.spawn
   out.kills = b.kills
   out.deaths = b.deaths
+  out.shots = b.shots
+  out.hits = b.hits
+  out.damage = b.damage
+  out.team = b.team
   // Normalized lerp on the shorter arc: ticks are 33 ms apart, where it matches slerp to well under a pixel.
   const [ax, ay, az, aw] = a.orientation
   const [bx0, by0, bz0, bw0] = b.orientation

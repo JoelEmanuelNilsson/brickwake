@@ -53,9 +53,18 @@ export const ShipLifeSchema = Schema.TaggedUnion({
   sunk: { respawnAt: Schema.Finite },
 })
 
+/** A game mode on the wire, as in `MatchMode`. */
+export const MatchModeSchema = Schema.Literals(["ffa", "tdm"])
+
+/** A TDM side on the wire, as in `Team`. */
+export const TeamSchema = Schema.Literals(["pirates", "navy"])
+
+/** Sinks each TDM side has scored, as in `TeamSinks`. */
+export const TeamSinksSchema = Schema.Struct({ pirates: Schema.Int, navy: Schema.Int })
+
 /** How the match is paced and won, as in `MatchRules`; fixed for a room, sent on join. */
 export const MatchRulesSchema = Schema.Struct({
-  mode: Schema.Literal("ffa"),
+  mode: MatchModeSchema,
   scoreLimit: Schema.Int,
   timeLimit: Schema.Finite,
   warmupSeconds: Schema.Finite,
@@ -63,7 +72,7 @@ export const MatchRulesSchema = Schema.Struct({
 })
 
 /** Who won, as in `MatchWinner`; null on a draw. */
-export const MatchWinnerSchema = Schema.NullOr(Schema.TaggedUnion({ ship: { shipId: ShipIdSchema } }))
+export const MatchWinnerSchema = Schema.NullOr(Schema.TaggedUnion({ ship: { shipId: ShipIdSchema }, team: { team: TeamSchema } }))
 
 /** Where the match is in its lifecycle, as in `MatchPhase`; times are sim seconds. */
 export const MatchPhaseSchema = Schema.TaggedUnion({
@@ -93,6 +102,12 @@ export const ShipSnapshot = Schema.Struct({
   spawn: Schema.Int,
   kills: Schema.Int,
   deaths: Schema.Int,
+  /** Balls fired, balls that struck an enemy for damage, and the HP they took, this match. */
+  shots: Schema.Int,
+  hits: Schema.Int,
+  damage: Schema.Finite,
+  /** TDM side; null in FFA. */
+  team: Schema.NullOr(TeamSchema),
 })
 
 /** Wire form of one ship. */
@@ -166,7 +181,7 @@ export type ServerEvent = typeof ServerEvent.Type
 export const ClientMessage = Schema.TaggedUnion({
   /** Quick play: take a ship in a room of `mode` with space, or a new room. `scenario` starts a private room from that start state instead. */
   join: {
-    mode: Schema.Literal("ffa"),
+    mode: MatchModeSchema,
     scenario: Schema.optionalKey(ScenarioNameSchema),
     /** With `scenario`: joins the private room of that scenario opened under this name while it has a free seat. */
     room: Schema.optionalKey(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(32))),
@@ -191,6 +206,7 @@ export const ServerMessage = Schema.TaggedUnion({
     sea: SeaStateSchema,
     rules: MatchRulesSchema,
     phase: MatchPhaseSchema,
+    teamSinks: TeamSinksSchema,
     wind: WindSnapshot,
     ships: Schema.Array(ShipSnapshot),
     /** Every damaged ship's `removedParts`, in hit order; later hits arrive as `ballHit.removed`. */
@@ -200,6 +216,7 @@ export const ServerMessage = Schema.TaggedUnion({
   snapshot: {
     tick: Schema.Int,
     phase: MatchPhaseSchema,
+    teamSinks: TeamSinksSchema,
     wind: WindSnapshot,
     ships: Schema.Array(ShipSnapshot),
     events: Schema.Array(ServerEvent),
@@ -241,6 +258,10 @@ export const shipSnapshot = (ship: ShipState): ShipSnapshot => ({
   spawn: ship.spawn,
   kills: ship.kills,
   deaths: ship.deaths,
+  shots: ship.shots,
+  hits: ship.hits,
+  damage: ship.damage,
+  team: ship.team ?? null,
 })
 
 /** The damaged ships' removed parts, for the welcome. */

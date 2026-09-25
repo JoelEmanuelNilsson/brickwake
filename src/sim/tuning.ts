@@ -193,6 +193,8 @@ export const tuning = {
     maxShips: 12,
     /** FFA: first to `scoreLimit` sinks or the most after `timeLimit` seconds. Warmup before, results after. */
     ffa: { scoreLimit: 10, timeLimit: 8 * 60, warmupSeconds: 10, endedSeconds: 12 },
+    /** TDM, Pirates vs Navy: first side to `scoreLimit` sinks or the side with the most after `timeLimit` seconds. */
+    tdm: { scoreLimit: 20, timeLimit: 10 * 60, warmupSeconds: 10, endedSeconds: 15 },
     /** Joining ships start on this ring about the arena centre, in the free slot farthest from others. */
     spawnRing: { radius: 260, slots: 12 },
   },
