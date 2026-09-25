@@ -109,6 +109,24 @@ test("in play a sink scores for the shooter and against the sunk ship", () => {
   expect(ship(state, b)).toMatchObject({ kills: 0, deaths: 1 })
 })
 
+test("a sink repairs the sinker by a share of full HP and rebuilds the same share of its missing HP's newest parts", () => {
+  const holed = Array.from({ length: 20 }, (_, i) => 10 + i)
+  const damaged = (hp: number) => ({ ...scenarios.duel, ships: scenarios.duel.ships.map((s) => (s.id === a ? { ...s, hp, removedParts: holed } : s)) })
+  const heal = Math.round(tuning.damage.sinkRepair * tuning.damage.hullHp)
+
+  const { state, events } = sinkB(damaged(100))
+  const kept = Math.round((holed.length * (tuning.damage.hullHp - 100 - heal)) / (tuning.damage.hullHp - 100))
+  const sunkAt = events.findIndex((event) => event._tag === "shipSunk")
+  expect(events[sunkAt + 1]).toEqual({ _tag: "shipHealed", tick: state.tick - 1, shipId: a, healed: heal, hp: 100 + heal, keptParts: kept })
+  expect(ship(state, a)).toMatchObject({ hp: 100 + heal, removedParts: holed.slice(0, kept) })
+
+  const topped = sinkB(damaged(tuning.damage.hullHp - 10))
+  expect(topped.events).toContainEqual(expect.objectContaining({ _tag: "shipHealed", healed: 10, keptParts: 0 }))
+  expect(ship(topped.state, a)).toMatchObject({ hp: tuning.damage.hullHp, removedParts: [] })
+
+  expect(sinkB(scenarios.duel).events.filter((event) => event._tag === "shipHealed")).toEqual([])
+})
+
 const warmupDuel = () => {
   const empty = createMatch({ seed: 7, sea: seas.calm, wind: makeWind({ toward: -Math.PI / 2, speed: 14, gustiness: 0 }), ships: [] })
   const two = addShip(addShip(empty, { id: a, x: 0, z: 0, heading: 0 }), { id: b, x: 0, z: 150, heading: 0 })
@@ -118,7 +136,8 @@ const warmupDuel = () => {
 test("warmup: sinks do not score; play starts on time with scores cleared and afloat ships repaired", () => {
   const start = warmupDuel()
   expect(start.phase).toEqual({ _tag: "warmup", endsAt: ffaRules.warmupSeconds })
-  const { state } = sinkB(start)
+  const { state, events } = sinkB({ ...start, ships: start.ships.map((s) => (s.id === a ? { ...s, hp: 100 } : s)) })
+  expect(events.filter((event) => event._tag === "shipHealed")).toEqual([])
   expect(ship(state, a).kills).toBe(0)
   expect(ship(state, b).deaths).toBe(0)
   const damaged = { ...state, ships: state.ships.map((s) => (s.id === a ? { ...s, hp: 40 } : s)) }

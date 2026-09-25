@@ -165,6 +165,8 @@ export const tuning = {
   damage: {
     /** Hull HP a ship starts with. */
     hullHp: 225,
+    /** Share of `hullHp` a ship gets back for each sink credited to it, up to full; the same share of its missing HP's bricks is rebuilt. */
+    sinkRepair: 0.3,
     /** HP one ball takes off the hull it hits. */
     perBall: 5,
     /** HP a ball takes when it strikes the upper works (rails, castles, rig), and when it meets no brick (the sails). */

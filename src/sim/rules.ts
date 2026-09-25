@@ -80,8 +80,13 @@ export interface MatchScore {
   readonly teamSinks: TeamSinks
 }
 
-/** Credits a sink of `victim` by `by` (undefined when no ship caused it). An ally's sink credits nobody. */
-export const scoreSink = (rules: MatchRules, score: MatchScore, victim: ShipId, by: ShipId | undefined): MatchScore => {
+/** Credits a sink of `victim` by `by` (undefined when no ship caused it), naming the ship `credited`. An ally's sink credits nobody. */
+export const scoreSink = (
+  rules: MatchRules,
+  score: MatchScore,
+  victim: ShipId,
+  by: ShipId | undefined,
+): MatchScore & { readonly credited: ShipId | undefined } => {
   const victimShip = score.ships.find((ship) => ship.id === victim)
   const byShip = score.ships.find((ship) => ship.id === by)
   const credited = byShip !== undefined && victimShip !== undefined && !allies(byShip, victimShip) ? byShip : undefined
@@ -90,10 +95,11 @@ export const scoreSink = (rules: MatchRules, score: MatchScore, victim: ShipId, 
   )
   switch (rules.mode) {
     case "ffa":
-      return { ships, teamSinks: score.teamSinks }
+      return { ships, teamSinks: score.teamSinks, credited: credited?.id }
     case "tdm": {
       const team = credited?.team
-      return { ships, teamSinks: team === undefined ? score.teamSinks : { ...score.teamSinks, [team]: score.teamSinks[team] + 1 } }
+      const teamSinks = team === undefined ? score.teamSinks : { ...score.teamSinks, [team]: score.teamSinks[team] + 1 }
+      return { ships, teamSinks, credited: credited?.id }
     }
   }
 }

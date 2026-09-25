@@ -46,9 +46,11 @@ test("a sink scores for the sinker's side, an ally's sink scores nobody, and the
   const navy = state.ships.find((ship) => ship.team === "navy")!
   const scored = scoreSink(state.rules, { ships: state.ships, teamSinks: noTeamSinks }, navy.id, pirate.id)
   expect(scored.teamSinks).toEqual({ pirates: 1, navy: 0 })
+  expect(scored.credited).toBe(pirate.id)
   expect(shipOf({ ...state, ships: scored.ships }, pirate.id).kills).toBe(1)
   const friendly = scoreSink(state.rules, scored, mate.id, pirate.id)
   expect(friendly.teamSinks).toEqual({ pirates: 1, navy: 0 })
+  expect(friendly.credited).toBeUndefined()
   expect(shipOf({ ...state, ships: friendly.ships }, pirate.id).kills).toBe(1)
   expect(winnerOf(state.rules, scored)).toEqual({ _tag: "team", team: "pirates" })
   expect(winnerOf(state.rules, { ships: state.ships, teamSinks: { pirates: 4, navy: 4 } })).toBeUndefined()

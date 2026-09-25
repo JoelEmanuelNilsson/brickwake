@@ -21,3 +21,21 @@ test("a welcome's list plus later hits give the server's parts gone; a respawn s
   wrecks.onEvent({ _tag: "shipRespawned", tick: 2, shipId: dummy })
   expect(wrecks.of(dummy)).toBeUndefined()
 })
+
+test("a heal keeps the first parts knocked out as a new wreck, or none when every part is rebuilt", () => {
+  const { graph } = galleonClass()
+  const mast = graph.count - 60
+  const wrecks = new Wrecks(graph)
+  wrecks.load([{ shipId: dummy, removed: [10, 11] }])
+  wrecks.onEvent(hit([mast]))
+  const before = wrecks.of(dummy)
+  wrecks.onEvent({ _tag: "shipHealed", tick: 2, shipId: dummy, healed: 68, hp: 200, keptParts: 2 })
+  const healed = wrecks.of(dummy)
+  expect(healed).not.toBe(before)
+  expect(healed?.removed).toEqual([10, 11])
+  const server = shipWreck([10, 11])
+  const gone = Array.from({ length: graph.count }, (_, i) => i).filter((i) => !server.isPresent(i))
+  expect([...(healed?.gone ?? [])].sort((a, b) => a - b)).toEqual(gone)
+  wrecks.onEvent({ _tag: "shipHealed", tick: 3, shipId: dummy, healed: 25, hp: 225, keptParts: 0 })
+  expect(wrecks.of(dummy)).toBeUndefined()
+})

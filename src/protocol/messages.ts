@@ -172,6 +172,8 @@ export const ServerEvent = Schema.TaggedUnion({
   shipRespawned: { tick: Schema.Int, shipId: ShipIdSchema },
   /** A ship afloat was made whole in place: full HP, every part back. */
   shipRepaired: { tick: Schema.Int, shipId: ShipIdSchema },
+  /** A ship credited with a sink got `healed` HP back, to `hp`; only the first `keptParts` of its removed parts stay knocked out. */
+  shipHealed: { tick: Schema.Int, shipId: ShipIdSchema, healed: Schema.Finite, hp: Schema.Finite, keptParts: Schema.Int },
 })
 
 /** A server event. */
@@ -308,6 +310,7 @@ export const serverEvent = (event: MatchEvent): ServerEvent => {
       return { ...event, time: round(event.time, 6), by: event.by ?? null }
     case "shipRespawned":
     case "shipRepaired":
+    case "shipHealed":
       return event
   }
 }
