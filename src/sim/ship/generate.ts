@@ -57,6 +57,17 @@ export const placeAssembly = (assembly: Assembly, x: number, y: number, z: numbe
   })
 }
 
+/**
+ * Where a gun at `height` m (its barrel axis) and `gx` m along the ship gets its port, grid units: `base` is the deck
+ * plate its carriage stands on, the port starts `port.sill` plates above it, and its x range is centred on the gun.
+ */
+export const gunPortCells = (spec: ShipSpec, height: number, gx: number) => {
+  const base = Math.round(spec.waterline + height / gridMetres.plate - spec.gunAxis)
+  const x0 = Math.round(spec.midship + gx / gridMetres.stud - spec.port.width / 2)
+  const y0 = base + spec.port.sill
+  return { x: [x0, x0 + spec.port.width] as const, y: [y0, y0 + spec.port.height] as const, base }
+}
+
 /** Samples a piecewise-linear curve, clamped at both ends. */
 export const sampleCurve = (curve: Curve, t: number): number => {
   const first = curve[0]
@@ -177,7 +188,7 @@ export const generateShip = (spec: ShipSpec): GeneratedShip => {
   }
   const planEnd = spec.plan[spec.plan.length - 1]?.[0] ?? 0
   const lengthX = Math.ceil(planEnd + spec.stemRake * (height - spec.waterline)) + 2
-  // Two studs of margin outside the widest hull for the gunport frames that stand proud of it.
+  // Two studs of margin outside the widest hull for parts built proud of it.
   const half = Math.ceil(spec.plan.reduce((m, [, hb]) => Math.max(m, hb), 0) * spec.section.reduce((m, [, f]) => Math.max(m, f), 0)) + 2
   const widthZ = 2 * half
   const inGrid = (x: number, p: number, z: number) => x >= 0 && x < lengthX && p >= 0 && p < height && z >= -half && z < half
@@ -256,6 +267,11 @@ export const generateShip = (spec: ShipSpec): GeneratedShip => {
     }
   }
 
+  // Deck beams hang under the lower gun deck's ceiling, so the deck seen through a port reads as a gun deck, not a box.
+  const { y: beamY, every } = spec.deckBeams
+  for (let x = 0; x < lengthX; x++)
+    if (x % every >= every - 2) for (let z = -half; z < half; z++) if (isInside(x, beamY, z) && kind[at(x, beamY, z)] === empty) kind[at(x, beamY, z)] = beam
+
   const paint = new Map<number, BrickColor>()
   const openings: Array<readonly [number, number, number]> = []
   const carve = (x: number, p: number, z: number) => {
@@ -271,30 +287,42 @@ export const generateShip = (spec: ShipSpec): GeneratedShip => {
     }
     paint.set(at(x, p, z), c)
   }
+  const framed = new Set<number>()
   const fixtures: Array<ShipPart> = []
   const ports: Array<GunPort> = []
   for (const deck of spec.guns.decks) {
-    const centre = spec.waterline + deck.height / gridMetres.plate
-    const y0 = Math.round(centre - spec.port.height / 2)
-    const y1 = y0 + spec.port.height
     const faceZ = Math.round(deck.halfBeam / gridMetres.stud)
     for (const gx of deck.xs) {
-      const x0 = Math.round(spec.midship + gx / gridMetres.stud - spec.port.width / 2)
-      const x1 = x0 + spec.port.width
+      const { x: [x0, x1], y: [y0, y1], base } = gunPortCells(spec, deck.height, gx)
       for (const side of ["port", "starboard"] as const) {
         const zOf = (z: number) => (side === "port" ? -1 - z : z)
         ports.push({ side, x: [x0, x1], y: [y0, y1] })
         for (let x = x0; x < x1; x++) for (let p = y0; p < y1; p++) for (let z = 0; z < half; z++) if (carve(x, p, zOf(z))) openings.push([x, p, zOf(z)])
-        // The frame: the hull's outer cell and one stud proud of it, so every frame part bonds into the wall.
-        for (const z of [faceZ - 1, faceZ]) {
-          for (const x of [x0 - 1, x1]) for (let p = y0; p < y1; p++) build(x, p, zOf(z), spec.portFrame.jamb)
-          for (let x = x0 - 1; x <= x1; x++) {
-            build(x, y0 - 1, zOf(z), spec.portFrame.sill)
-            build(x, y1, zOf(z), spec.portFrame.lintel)
+        // The frame is painted into the shell, flush with the hull, so the port is no deeper than the wall. The side
+        // steps in (tumblehome) within a port's height, so each row's frame follows that row's outer face.
+        const frame = (x: number, p: number, c: BrickColor) => {
+          let z = half - 1
+          while (z > 0 && !isInside(x, p, zOf(z))) z--
+          for (let k = 0; k < spec.shell; k++) {
+            paint.set(at(x, p, zOf(z - k)), c)
+            framed.add(at(x, p, zOf(z - k)))
           }
         }
-        // Two studs inboard of the face puts the muzzle a stud and a half past the frame.
-        fixtures.push(...placeAssembly(spec.gun, x0, y0, faceZ - 2, 0, side === "port"))
+        for (const x of [x0 - 1, x1]) for (let p = y0; p < y1; p++) frame(x, p, spec.portFrame.jamb)
+        // A rib stands against the wall's inner face either side of the port, from the deck to the lintel.
+        for (const x of [x0 - 1, x1])
+          for (let p = base; p <= y1; p++) {
+            let z = half - 1
+            while (z > 0 && !(isInside(x, p, zOf(z)) && kind[at(x, p, zOf(z))] === wall)) z--
+            while (z > 0 && kind[at(x, p, zOf(z - 1))] === wall) z--
+            if (z > 0) build(x, p, zOf(z - 1), spec.portFrame.rib)
+          }
+        for (let x = x0 - 1; x <= x1; x++) {
+          frame(x, y0 - 1, spec.portFrame.sill)
+          frame(x, y1, spec.portFrame.lintel)
+        }
+        // Centred in the port and inboard, so the carriage stands on the deck and only the muzzle clears the hull.
+        fixtures.push(...placeAssembly(spec.gun, x0 + (spec.port.width - 2) / 2, base, faceZ - spec.gunInboard, 0, side === "port"))
       }
     }
   }
@@ -610,10 +638,11 @@ export const generateShip = (spec: ShipSpec): GeneratedShip => {
   const attached = all.filter((_, i) => seen[i] === 1)
   const rigFrom = attached.length - rig.filter((_, i) => seen[mottled.length + i] === 1).length
   // Paint is outside only: hull parts the outside cannot reach (ports sealed) are bare timber, as in ref-04's gun
-  // deck, so a breach shows broken wood against the painted hull instead of black on black.
+  // deck, so a breach shows broken wood against the painted hull instead of black on black. Port frames keep their paint
+  // through the wall, so a port's reveal reads as its frame (ref-04) rather than bare wood lit by the sun.
   const hullPaint = new Set(spec.strakes.flatMap((s) => [s.color, ...(s.mottle ?? []).map((m) => m.color)]))
   const air = new ShipAir(attached, openings)
-  const finished = attached.map((p, i): ShipPart => (i < rigFrom && hullPaint.has(p.color) && air.partLevel(i) < 2 ? { ...p, color: pickMottle(spec.deckColor, spec.deckMottle, hash(p.x, p.y, p.z, 11)) } : p))
+  const finished = attached.map((p, i): ShipPart => (i < rigFrom && hullPaint.has(p.color) && air.partLevel(i) < 2 && !framed.has(at(p.x, p.y, p.z)) ? { ...p, color: pickMottle(spec.deckColor, spec.deckMottle, hash(p.x, p.y, p.z, 11)) } : p))
   const edges = connectParts(finished)
   return { parts: finished, edges, keel: keelParts(finished), ports, openings, pruned: all.length - attached.length, rigFrom }
 }

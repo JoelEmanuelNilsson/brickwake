@@ -11,7 +11,7 @@ export type GunDeck = "lower" | "upper"
 export interface GunMount {
   readonly side: BroadsideSide
   readonly deck: GunDeck
-  /** Trunnion position at the gunport, ship-local metres. */
+  /** Where the ball leaves: on the barrel axis where it crosses the hull face, ship-local metres. */
   readonly position: Vec3
   /** Unit vector straight out of the port, ship-local (±z). */
   readonly outward: Vec3
@@ -19,7 +19,7 @@ export interface GunMount {
   readonly rippleDelay: number
 }
 
-/** Where a ship's gunports are: per deck its height above the waterline, the hull side's distance from the centreline, and the port x positions (metres). */
+/** Where a ship's gunports are: per deck its barrel axis height above the waterline, the hull side's distance from the centreline, and the port x positions (metres). */
 export interface GunLayoutSpec {
   readonly decks: ReadonlyArray<{ readonly deck: GunDeck; readonly height: number; readonly halfBeam: number; readonly xs: ReadonlyArray<number> }>
 }
@@ -31,8 +31,8 @@ export interface GunLayoutSpec {
  */
 export const galleonGunSpec: GunLayoutSpec = {
   decks: [
-    { deck: "lower", height: 1.3, halfBeam: 4, xs: [-8.4, -5.6, -2.8, 0, 2.8, 5.6] },
-    { deck: "upper", height: 3.3, halfBeam: 3.6, xs: [-10, -7.2, -4.4, -1.6, 1.2, 4] },
+    { deck: "lower", height: 1.38, halfBeam: 4, xs: [-8.4, -5.6, -2.8, 0, 2.8, 5.6] },
+    { deck: "upper", height: 3.46, halfBeam: 3.6, xs: [-10, -7.2, -4.4, -1.6, 1.2, 4] },
   ],
 }
 

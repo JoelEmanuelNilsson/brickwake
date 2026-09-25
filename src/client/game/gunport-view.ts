@@ -1,37 +1,41 @@
 import { Group, MathUtils, Matrix4, type Object3D, PointLight, Quaternion, type Scene, Vector3 } from "three"
 import { gunLayout, type BroadsideSide } from "../../sim/gun-layout.ts"
 import { type BrickPlacement, BrickShipMesh } from "../bricks/brick-ship-mesh.ts"
+import { gridMetres } from "../../sim/ship/generate.ts"
+import { galleonSpec } from "../../sim/ship/spec.ts"
 import type { GalleonModel } from "./galleon.ts"
 
 /** Seconds to ease into and out of the port. */
 const enterSeconds = 0.5
 const leaveSeconds = 0.38
-/** Vertical field of view at the port, degrees: a slight zoom from the chase camera's 55°. */
-export const gunportFov = 40
+/** Vertical field of view at the port, degrees: a slight zoom from the chase camera's 55° that still shows the gun deck around the port. */
+export const gunportFov = 50
 /** Near plane at the port, metres: the recoiling breech passes a few tenths of a metre under the eye. */
 export const gunportNear = 0.08
 /**
- * How far the view may swing either side of straight out of the port, and down/up. The port is 0.8 × 0.96 m through a
- * 1.6 m deep frame with the barrel on its axis: past ±18° the line of sight meets the jambs, below −9° the muzzle, above +7° the lintel.
+ * How far the view may swing either side of straight out of the port, and down/up. The port is 1.6 × 1.44 m through a
+ * 0.8–1.2 m wall with the barrel low in it: past ±18° the line of sight meets the bow-side jamb, below −8° the barrel;
+ * +12° keeps the lintel in frame.
  */
 const lookArc = MathUtils.degToRad(18)
-const lookDown = MathUtils.degToRad(-9)
-const lookUp = MathUtils.degToRad(7)
+const lookDown = MathUtils.degToRad(-8)
+const lookUp = MathUtils.degToRad(12)
 /**
  * The point mid-port the line of sight always passes through, in the gun's frame (x toward the bow on starboard, y up,
  * z out of the port) from the cannon part's origin, metres: between the barrel's top and the lintel, a little left, so the
  * barrel runs up the lower right to the target as in ref-04/05.
  */
-const sightPoint = new Vector3(0.1, 0.9, -0.2)
-/** How far behind the sight point the eye stands, metres: just inside the gun deck, behind the breech. */
-const eyeBack = 1.35
+const sightPoint = new Vector3(0.45, 1.05, -0.4)
+/** How far behind the sight point the eye stands, metres: well inside the gun deck, so the deck shows around the port. */
+const eyeBack = 2.6
 /** How far out along the sight line the path into the port bends, metres: the camera dives in through the port. */
 const approachOut = 7
 
-/** Ship-local height of the underside of the lower gun deck's beams (plate 29 above the plate-13 waterline). */
-const beamUnderside = (29 - 13) * 0.16
-/** Lantern hung from the beams of the lower gun deck beside the eye, relative to the viewed gun in its frame. */
-const lanternSpots = [new Vector3(0.95, 0, -1.55)] as const
+/** Ship-local height of the lower gun deck's ceiling, above its hanging beams. */
+const ceiling = (galleonSpec.deckBeams.y + 1 - galleonSpec.waterline) * gridMetres.plate
+/** Lanterns hung from the lower gun deck's ceiling, relative to the viewed gun in its frame: one at the view's upper left, as in ref-04. */
+const lanternSpots = [new Vector3(1.4, 0, -0.9)] as const
+const lanternIntensity = 9
 
 /** Within this distance of the eye at the port, metres, muzzle-flash lights fade by (distance / reach)²: the gun deck's timber is a metre from the muzzle, and the flash tuned to light hulls 10 m off would white it out. */
 const flashReach = 14
@@ -149,8 +153,8 @@ export class GunportView {
 }
 
 /**
- * A brick lantern hung from the lower gun deck's beams beside the eye, with a warm point light, shown only while the
- * gunport view is in use. The light is left out of the scene's light count otherwise, so the chase view pays nothing for it.
+ * Brick lanterns hung from the lower gun deck's ceiling around the port, each with a warm point light, shown only while the
+ * gunport view is in use. The lights are left out of the scene's light count otherwise, so the chase view pays nothing for them.
  */
 export class GunDeckLanterns {
   readonly #root = new Group()
@@ -173,7 +177,7 @@ export class GunDeckLanterns {
       return spot
     })
     this.#lights = lanternSpots.map(() => {
-      const light = new PointLight(0xff9a45, 6, 9, 1.6)
+      const light = new PointLight(0xff9a45, lanternIntensity, 9, 1.6)
       light.visible = false
       scene.add(light)
       return light
@@ -195,15 +199,15 @@ export class GunDeckLanterns {
     this.#root.visible = ship !== undefined && blend > 0
     for (const light of this.#lights) {
       light.visible = this.#root.visible
-      light.intensity = 6 * blend
+      light.intensity = lanternIntensity * blend
     }
     if (ship === undefined || !this.#root.visible) return
     this.#root.position.copy(ship.position)
     this.#root.quaternion.copy(ship.quaternion)
     lanternSpots.forEach((spot, i) => {
       view.gunFrame(spot, this.#v)
-      this.#spots[i]?.position.set(this.#v.x, beamUnderside, this.#v.z)
-      this.#lights[i]?.position.set(this.#v.x, beamUnderside - 0.5, this.#v.z).applyQuaternion(ship.quaternion).add(ship.position)
+      this.#spots[i]?.position.set(this.#v.x, ceiling, this.#v.z)
+      this.#lights[i]?.position.set(this.#v.x, ceiling - 0.5, this.#v.z).applyQuaternion(ship.quaternion).add(ship.position)
     })
   }
 

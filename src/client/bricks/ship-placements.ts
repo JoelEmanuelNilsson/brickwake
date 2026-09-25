@@ -42,8 +42,9 @@ export const shipPlacements = (spec: ShipSpec, ship: GeneratedShip): ShipPlaceme
     const zs = ship.openings.filter(([x, y, z]) => x === port.x[0] && y === port.y[0] && (z < 0) === (port.side === "port")).map(([, , z]) => z)
     if (zs.length === 0) return []
     const inner = port.side === "port" ? Math.max(...zs) : Math.min(...zs)
-    const outer = port.side === "port" ? Math.min(...zs) : Math.max(...zs)
-    const index = owner.get(`${port.x[0]},${port.y[1]},${outer}`)
+    // The lintel may sit inboard of the port's outer face where the hull steps in above it.
+    const outwardZs = [...zs].sort((a, b) => (port.side === "port" ? a - b : b - a))
+    const index = outwardZs.map((z) => owner.get(`${port.x[0]},${port.y[1]},${z}`)).find((i) => i !== undefined)
     if (index === undefined) return []
     const width = port.x[1] - port.x[0]
     const height = port.y[1] - port.y[0]

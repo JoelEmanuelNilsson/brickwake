@@ -92,10 +92,16 @@ export interface ShipSpec {
   readonly strakes: ReadonlyArray<Strake>
   /** The gun layout the gunports are carved for, in ship-local metres. */
   readonly guns: GunLayoutSpec
-  /** Gunport opening size: width in studs, height in plates. */
-  readonly port: { readonly width: number; readonly height: number }
-  /** Colours of the frame around each gunport, a stud proud of the hull: side jambs, sill below, lintel above. */
-  readonly portFrame: { readonly jamb: BrickColor; readonly sill: BrickColor; readonly lintel: BrickColor }
+  /** Gunport opening: width in studs, height in plates, and plates from the gun's deck to its bottom. */
+  readonly port: { readonly width: number; readonly height: number; readonly sill: number }
+  /** Plates from a gun's deck to its barrel axis (the gun layout's height). */
+  readonly gunAxis: number
+  /** Studs inboard of the hull face the gun's footprint starts, so its carriage stands in the gun deck. */
+  readonly gunInboard: number
+  /** Beams across the ship under the lower gun deck's ceiling: the plate course they hang in, a 2-stud beam every `every` studs. */
+  readonly deckBeams: { readonly y: number; readonly every: number }
+  /** Colours of the frame painted into the hull around each gunport: side jambs, sill below, lintel above; and the ribs inside either side. */
+  readonly portFrame: { readonly jamb: BrickColor; readonly sill: BrickColor; readonly lintel: BrickColor; readonly rib: BrickColor }
   /** The assembly at every gunport, anchored at the port's inboard-aft bottom corner, muzzle out. */
   readonly gun: Assembly
   readonly stern: ReadonlyArray<SternPanel>
@@ -118,10 +124,10 @@ export const galleonSpec: ShipSpec = {
   courses: [
     "brick", "brick", "brick", "brick", "plate", // 0–13 bottom, to the waterline
     "brick", "plate", "plate", // 13–18 wale, gold line, lower gun deck
-    "brick", "brick", "plate", // 18–25 lower gunports, gold line
-    "brick", "plate", "plate", "plate", // 25–31 red band, gold line, upper gun deck
-    "brick", "brick", "plate", // 31–38 upper gunports, gold line
-    "brick", "plate", "plate", // 38–43 red rail, gold cap, quarterdeck and forecastle
+    "brick", "brick", "brick", "plate", // 18–28 lower gunports, gold lintel line
+    "plate", "plate", "plate", // 28–31 red band, upper gun deck
+    "brick", "brick", "brick", "plate", // 31–41 upper gunports, gold lintel line
+    "plate", "plate", // 41–43 gold cap, quarterdeck and forecastle
     "brick", "plate", "plate", "plate", // 43–49 castle walls, gold cap, poop deck
     "brick", "plate", // 49–53 poop walls, gold cap
   ],
@@ -151,12 +157,14 @@ export const galleonSpec: ShipSpec = {
   strakes: [
     { below: 13, color: "black", mottle: black },
     { below: 16, color: "darkRed", mottle: red },
+    { below: 17, color: "black", mottle: black },
+    { below: 18, color: "pearlGold" },
     { below: 24, color: "black", mottle: black },
-    { below: 25, color: "pearlGold" },
-    { below: 28, color: "darkRed", mottle: red },
+    { below: 27, color: "darkRed", mottle: red },
+    { below: 28, color: "pearlGold" },
+    { below: 31, color: "darkRed", mottle: red },
     { below: 37, color: "black", mottle: black },
-    { below: 38, color: "pearlGold" },
-    { below: 41, color: "darkRed", mottle: red },
+    { below: 40, color: "darkRed", mottle: red },
     { below: 42, color: "pearlGold" },
     { below: 46, color: "black", mottle: black },
     { below: 47, color: "pearlGold" },
@@ -164,14 +172,19 @@ export const galleonSpec: ShipSpec = {
     { below: 99, color: "pearlGold" },
   ],
   guns: galleonGunSpec,
-  port: { width: 2, height: 6 },
-  portFrame: { jamb: "darkRed", sill: "darkRed", lintel: "pearlGold" },
+  // Wide and tall enough to see the target's full height past the barrel from inside the gun deck (ref-04).
+  port: { width: 4, height: 9, sill: 0 },
+  // The cannon part's barrel axis is 29 LDU above its base.
+  gunAxis: 29 / 8,
+  gunInboard: 4,
+  deckBeams: { y: 28, every: 4 },
+  portFrame: { jamb: "darkRed", sill: "darkRed", lintel: "pearlGold", rib: "darkBrown" },
   gun: cannon,
   stern: [
     { z: [1, 3], y: [31, 37], fill: "window" },
     { z: [4, 6], y: [31, 37], fill: "window" },
     { z: [3, 4], y: [31, 37], fill: "pearlGold" },
-    { z: [6, 8], y: [28, 37], fill: "pearlGold" },
+    { z: [6, 8], y: [28, 40], fill: "pearlGold" },
     { z: [1, 3], y: [43, 46], fill: "window" },
     { z: [4, 6], y: [43, 46], fill: "window" },
     { z: [0, 1], y: [43, 46], fill: "pearlGold" },

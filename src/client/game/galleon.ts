@@ -113,7 +113,7 @@ export const loadGalleon = (): GalleonModel => {
         best = placement
       }
     }
-    if (best === undefined || bestDistance > 0.5) throw new Error(`gun ${index} has no cannon part at its port`)
+    if (best === undefined || bestDistance > 1) throw new Error(`gun ${index} has no cannon part at its port`)
     return { cannon: new Vector3().setFromMatrixPosition(best.matrix), muzzle: cannonMuzzle.clone().applyMatrix4(best.matrix) }
   })
 

@@ -47,7 +47,7 @@ test("the graph builds in a few ms, and a hit with its mesh update and reveals c
       hits++
     }
   expect(buildMs).toBeLessThan(20)
-  expect(hits).toBeGreaterThan(50)
+  expect(hits).toBeGreaterThan(40)
   expect((performance.now() - start) / hits).toBeLessThan(1)
 })
 

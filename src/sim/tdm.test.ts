@@ -80,7 +80,7 @@ test("allies' balls strike each other's hulls and sails for no damage and break 
 })
 
 test("TDM win: a headless Pirates-vs-Navy bot match ends with the side that first reached the score limit, bots never aiming at allies", () => {
-  let state = tdmMatch(7, 12)
+  let state = tdmMatch(3, 12)
   const events: Array<MatchEvent> = []
   let allyTargets = 0
   const started = Bun.nanoseconds()

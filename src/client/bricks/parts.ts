@@ -35,7 +35,7 @@ const cannon: Build = (m) => {
     m.box([side > 0 ? 9 : -15, 7, -30], [side > 0 ? 15 : -9, 23, 22])
     for (const z of [-24, 14]) m.lathe([[0, -3], [9, -3], [9, 3], [0, 3]], 10, translated(side * 18, 9, z, rotateZ90))
   }
-  // Heavier and longer than the real part so the muzzle clears the proud port frame and reads at game distance.
+  // Heavier and longer than the real part so the muzzle clears the hull face from inboard and reads at game distance.
   const barrel = translated(0, 29, 0, rotateX90.clone().multiply(new Matrix4().makeScale(1.25, 1.2, 1.25)))
   m.lathe([[0, -38], [3.5, -38], [4.5, -36], [3, -33], [7, -32], [9.5, -29], [9.5, -20], [8.5, -18], [8.5, 8], [7.5, 11], [7, 40], [8.5, 42], [9, 48], [8, 50], [5, 50], [5, 44]], 12, barrel)
   m.use(0, 0.08)

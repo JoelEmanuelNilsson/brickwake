@@ -15,8 +15,8 @@ test("every gun of the sim's layout has a drawn cannon at its port, muzzle outbo
     if (mount === undefined) throw new Error(`gun ${i} has no mount`)
     expect(gun.cannon.x).toBeCloseTo(mount.position.x, 5)
     expect(Math.sign(gun.muzzle.z)).toBe(Math.sign(mount.outward.z))
-    expect(Math.abs(gun.muzzle.z) - Math.abs(mount.position.z)).toBeGreaterThan(0.8)
-    expect(Math.abs(gun.muzzle.y - mount.position.y)).toBeLessThan(0.3)
+    expect(Math.abs(gun.muzzle.z) - Math.abs(mount.position.z)).toBeGreaterThan(0.2)
+    expect(Math.abs(gun.muzzle.y - mount.position.y)).toBeLessThan(0.01)
   })
 })
 

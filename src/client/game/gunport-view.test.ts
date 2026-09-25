@@ -69,5 +69,5 @@ test("turning the view is held inside what the port shows", () => {
   port.enter(ship, new Vector3(0, 0, 100))
   port.look(1e5, -1e5, 0.0022)
   expect(Math.abs(port.yaw)).toBeLessThan(0.33)
-  expect(port.pitch).toBeLessThan(0.13)
+  expect(port.pitch).toBeLessThan(0.22)
 })
