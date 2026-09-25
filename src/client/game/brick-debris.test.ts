@@ -106,6 +106,18 @@ test("a loose brick dropped onto the deck bounces and comes to rest on it, ridin
   expect(Math.max(...heights.slice(impact)) - heights[impact - 1]!).toBeGreaterThan(0.1)
 })
 
+test("bricks resting on a deck stop resting on it once their view goes back to the pool for another ship", () => {
+  const { effects, audio } = recorder()
+  const debris = new BrickDebris(new Scene(), model, effects, audio, seeded(7))
+  const ship = source()
+  debris.drop(ship, [railPart()], 0, 0, 0)
+  run(debris, 3)
+  expect(debris.bodies()[0]?.wet).toBe(false)
+  debris.forget(ship)
+  run(debris, 3)
+  expect(debris.bodies()[0]?.wet).toBe(true)
+})
+
 test("a mast shot through at its foot comes down as one rigid chunk and topples over", () => {
   const { calls, effects, audio } = recorder()
   const debris = new BrickDebris(new Scene(), model, effects, audio, seeded(7))

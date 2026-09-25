@@ -1,4 +1,4 @@
-import { Box3, type BufferGeometry, Color, Group, InstancedMesh, MathUtils, Matrix4, MeshStandardMaterial, type PerspectiveCamera, Sphere, Vector3 } from "three"
+import { Box3, type BufferGeometry, Color, Group, InstancedMesh, MathUtils, Matrix4, MeshStandardMaterial, type PerspectiveCamera, ShaderChunk, Sphere, Vector3 } from "three"
 import type { BrickColor } from "../../sim/ship/colors.ts"
 import { brickColors } from "./colors.ts"
 import { metresPerLdu, type PartId, partCatalog } from "../../sim/ship/parts.ts"
@@ -64,6 +64,8 @@ export const createBrickLibrary = (): BrickLibrary => {
       .replace("#include <common>", `#include <common>\n${finishVaryings}`)
       .replace("#include <metalnessmap_fragment>", "#include <metalnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.3, vPearl);\nmetalnessFactor = mix(metalnessFactor, 0.6, vPearl);")
       .replace("#include <emissivemap_fragment>", `#include <emissivemap_fragment>\n${glowFragment}`)
+      .replace("#include <lights_fragment_begin>", enclosedLightsBegin)
+      .replace("#include <lights_fragment_end>", `${enclosedIndirect}\n#include <lights_fragment_end>\n${highlightCap}`)
   }
   plastic.customProgramCacheKey = () => "brick-plastic-finish"
   const studGeometry = buildStudGeometry()
@@ -92,23 +94,41 @@ export const createBrickLibrary = (): BrickLibrary => {
   }
 }
 
-// The finish rides the instance colour's red channel (+2 pearl, +4 glow) so it survives swap-remove and
+// The finish rides the instance colour's red channel (+2 pearl, +4 glow, +8 enclosed) so it survives swap-remove and
 // every finish shares one material and draw; lantern glass is marked by a vertex shade above 1.
 const pearlOffset = 2
 const glowOffset = 4
-const finishVaryings = "varying float vPearl;\nvarying float vGlow;\nvarying float vGlass;"
+const enclosedOffset = 8
+/** Share of open-sky light (hemisphere, environment, the unshadowed fill) that reaches a part enclosed by the hull. */
+const enclosedSkyLight = 0.3
+const finishVaryings = "varying float vPearl;\nvarying float vGlow;\nvarying float vGlass;\nvarying float vSkyLight;"
 const finishFromColors = /* glsl */ `
 #include <color_vertex>
 vPearl = 0.0;
 vGlow = 0.0;
+vSkyLight = 1.0;
 vGlass = step(${(glassShade - 0.5).toFixed(1)}, color.r);
 #ifdef USE_INSTANCING_COLOR
-  vGlow = step(${(glowOffset - 0.5).toFixed(1)}, instanceColor.r);
-  vPearl = step(${(pearlOffset - 0.5).toFixed(1)}, instanceColor.r) - vGlow;
-  vColor.r *= (instanceColor.r - ${pearlOffset.toFixed(1)} * vPearl - ${glowOffset.toFixed(1)} * vGlow) / max(instanceColor.r, 1e-4);
+  float finish = floor(instanceColor.r / ${pearlOffset.toFixed(1)});
+  vPearl = mod(finish, 2.0);
+  vGlow = mod(floor(finish / 2.0), 2.0);
+  vSkyLight = mix(1.0, ${enclosedSkyLight.toFixed(2)}, floor(finish / 4.0));
+  vColor.r *= (instanceColor.r - ${pearlOffset.toFixed(1)} * finish) / max(instanceColor.r, 1e-4);
 #endif
 vColor.rgb = mix(vColor.rgb, vec3(0.2, 0.1, 0.02), vGlass);
 `
+// A hole or a port shows the inside of the hull, lit as if it stood under the open sky, so on the side away from the
+// sun a hole is the same shade as the hull round it; enclosed parts get only a share of the unshadowed sky light.
+const enclosedDirectional = "getDirectionalLightInfo( directionalLight, directLight );"
+if (!ShaderChunk.lights_fragment_begin.includes(enclosedDirectional)) throw new Error("three's lights_fragment_begin changed: enclosed parts need their directional loop")
+const enclosedLightsBegin = ShaderChunk.lights_fragment_begin.replace(
+  enclosedDirectional,
+  `${enclosedDirectional}\n#if !defined( USE_SHADOWMAP ) || ( UNROLLED_LOOP_INDEX >= NUM_DIR_LIGHT_SHADOWS )\ndirectLight.color *= vSkyLight;\n#endif`,
+)
+const enclosedIndirect = "irradiance *= vSkyLight;\niblIrradiance *= vSkyLight;\nradiance *= vSkyLight;"
+// A 5° sun mirrored off glossy port sills and jambs reaches ~15 HDR, and every port along the side then blooms like a
+// lit window; capping direct highlights at 1.0 keeps the sheen under the bloom threshold (2.0).
+const highlightCap = "reflectedLight.directSpecular = min(reflectedLight.directSpecular, vec3(1.0));"
 const glowFragment = /* glsl */ `
 totalEmissiveRadiance += vGlass * vec3(9.0, 2.6, 0.3) + vGlow * diffuseColor.rgb * 0.7;
 `
@@ -125,18 +145,22 @@ const scratchMatrix = new Matrix4()
 const scratchStud = new Matrix4()
 const scratchScale = new Matrix4()
 const scratchPosition = new Vector3()
-const linearColors = new Map<BrickColor, Color>()
-/** The instance colour a part of `color` draws with: linear, finish flags on red. Shared; do not mutate. */
-export const brickColorLinear = (color: BrickColor): Color => {
-  const cached = linearColors.get(color)
+const linearColors = new Map<string, Color>()
+/** The instance colour a part of `color` draws with: linear, finish flags on red; `enclosed` inside the hull. Shared; do not mutate. */
+export const brickColorLinear = (color: BrickColor, enclosed = false): Color => {
+  const key = enclosed ? `${color} enclosed` : color
+  const cached = linearColors.get(key)
   if (cached !== undefined) return cached
   const { srgb, finish } = brickColors[color]
   const created = new Color().setHex(srgb)
   if (finish === "pearl") created.r += pearlOffset
   if (finish === "glow") created.r += glowOffset
-  linearColors.set(color, created)
+  if (enclosed) created.r += enclosedOffset
+  linearColors.set(key, created)
   return created
 }
+/** The instance colour `placement` draws with. */
+const placementColor = (placement: BrickPlacement): Color => brickColorLinear(placement.color, placement.hidden === true || placement.interior === true)
 const plugColor = brickColorLinear("black")
 
 /** A fixed-capacity InstancedMesh whose slots are packed: removing one moves the last instance into it. */
@@ -479,7 +503,7 @@ export class BrickShipMesh {
   private showPart(index: number, interior: boolean, upload: boolean) {
     const placement = this.placements[index]
     if (placement === undefined) return
-    this.near.add(index, placement.part, placement.matrix, brickColorLinear(placement.color), upload)
+    this.near.add(index, placement.part, placement.matrix, placementColor(placement), upload)
     this.addFlat(interior ? this.flatInner : this.flatOuter, index, upload)
   }
 
@@ -489,7 +513,7 @@ export class BrickShipMesh {
     if (placement === undefined || flat === undefined) return
     const [sx, sy, sz] = flat.scale
     scratchMatrix.multiplyMatrices(placement.matrix, scratchScale.makeScale(sx, sy, sz))
-    layer.add(index, flat.key, scratchMatrix, brickColorLinear(placement.color), upload)
+    layer.add(index, flat.key, scratchMatrix, placementColor(placement), upload)
   }
 
   private showStud(index: number, stud: number, upload: boolean) {
@@ -501,7 +525,7 @@ export class BrickShipMesh {
     scratchStud.makeTranslation(x * metresPerLdu, y * metresPerLdu, z * metresPerLdu)
     scratchMatrix.multiplyMatrices(placement.matrix, scratchStud)
     const key = (this.studStart[index] ?? 0) + stud
-    const color = brickColorLinear(placement.color)
+    const color = placementColor(placement)
     this.nearStuds.add(key, "studs", scratchMatrix, color, upload)
     this.midStuds.add(key, "studs", scratchMatrix, color, upload)
   }

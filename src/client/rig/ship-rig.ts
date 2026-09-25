@@ -20,6 +20,8 @@ import { type AtlasRegion, atlasRegions, liveryAtlas, type SailLivery } from "./
 
 /** Sail set: 0 furled on the yards, 1 reefed to half, 2 full. */
 export type SailLevel = 0 | 1 | 2
+/** What holds a sail up: see `ShipRig.setSailHeld`. */
+export type SailHold = "yard" | "mast" | "gone"
 
 /** Geometry of one ship class's cosmetic rig, built once and shared by every ship of the class. */
 export interface RigGeometry {
@@ -372,7 +374,9 @@ void sailShape(out vec3 p, out vec3 n) {
   float dbu = (amp * fill * PI * cu * sv + luff * v * (9.0 * cp * su + PI * cu * sp)) * uOpen;
   float dbv = (amp * fill * su * cv * 0.8 * PI + luff * su * (sp + 4.0 * v * cp)) * uOpen;
   vSail = vec3(id, position.yz);
-  p = bracedPoint(mix(anchor, position, uOpen) + normal * belly, angle, brace.x) * uShown[int(id + 0.5)] * rigShown();
+  // uShown: 0 gone, 1 with the mast, 2 held by a yard whatever the mast does.
+  float held = uShown[int(id + 0.5)];
+  p = bracedPoint(mix(anchor, position, uOpen) + normal * belly, angle, brace.x) * min(held, 1.0) * max(step(1.5, held), rigShown());
   n = bracedDirection(normalize(cross(tangentU + normal * dbu, tangentV * max(uOpen, 0.05) + normal * dbv)), angle);
 }
 `
@@ -550,9 +554,12 @@ export class ShipRig {
     this.uniforms.uBrace.value = angle
   }
 
-  /** Show or hide one sail by its index (layout sails in order, then the jib), e.g. when its yard falls. */
-  setSailShown(sail: number, shown: boolean): void {
-    if (sail >= 0 && sail < this.geometry.sailCount) this.uniforms.uShown.value[sail] = shown ? 1 : 0
+  /**
+   * What holds one sail up, by its index (layout sails in order, then the jib): "yard" shows it wherever its yard is, even
+   * with its mast gone (a yard falling alone brings its sail); "mast" shows it with its mast; "gone" hides it.
+   */
+  setSailHeld(sail: number, held: SailHold): void {
+    if (sail >= 0 && sail < this.geometry.sailCount) this.uniforms.uShown.value[sail] = held === "yard" ? 2 : held === "mast" ? 1 : 0
   }
 
   /** Show or hide everything that comes down with mast `mast` (a `RigLayout.masts` index): its sails, flags, ropes and pole. */

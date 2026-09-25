@@ -181,8 +181,9 @@ const fragmentShader = /* glsl */ `
     float fresnel = 0.02 + 0.98 * pow(1.0 - facing, 5.0);
     vec3 reflected = reflect(-view, normal);
     reflected.y = max(reflected.y, 0.005);
-    vec3 sky = textureCube(skyCube, reflected).rgb;
     float toSun = max(dot(normalize(reflected), sunDirection), 0.0);
+    // The sky is graded amber; away from the sun's path the sea reflects it cooled, keeping ref-01's dark teal water.
+    vec3 sky = textureCube(skyCube, reflected).rgb * mix(vec3(0.45, 1.2, 2.2), vec3(1.0), pow(toSun, 6.0));
     vec3 glint = vec3(9.0, 6.5, 4.0) * pow(toSun, 900.0) * (1.0 - smoothstep(400.0, 1400.0, distance));
 
     float crest = clamp(vHeight / max(waveHeight, 0.01) * 0.5 + 0.5, 0.0, 1.0);

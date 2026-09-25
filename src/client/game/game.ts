@@ -107,6 +107,7 @@ export class Game {
   readonly #sweep = (entry: ShipEntry, id: string) => {
     if (entry.seen === this.#frameCount) return
     this.scene.remove(entry.view.group)
+    this.#debris.forget(entry.view)
     this.#spareViews.push(entry.view)
     this.#ships.delete(id)
   }

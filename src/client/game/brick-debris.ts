@@ -258,6 +258,11 @@ export class BrickDebris {
     this.#fall(view, detached, dx, dz, 1)
   }
 
+  /** `view` no longer draws the ship its bricks came off (it went back to the pool): they stop resting on its deck. */
+  forget(view: DebrisSource): void {
+    for (let b = 0; b < this.#ships.length; b++) if (this.#ships[b] === view) this.#ships[b] = undefined
+  }
+
   /**
    * Parts come off `view`'s foundering ship on their own: each connected group falls as one body, shoved sideways by
    * `push` m/s along world (dx, dz). A group carrying a mast brings its sails and rigging down with it.
@@ -477,14 +482,15 @@ export class BrickDebris {
     return b
   }
 
-  /** A body carrying a mast's top takes a copy of that mast's rig: its sails, flags and ropes, as they were set. */
+  /** A body carrying a mast's top takes a copy of that mast's rig (sails, flags and ropes, as they were set); one carrying only a yard, its sail. */
   #attachGhost(view: DebrisSource, parts: ReadonlyArray<number>, b: number, cx: number, cy: number, cz: number) {
     const source = view.rig
-    if (parts.length < chunkPieces || source === undefined) return
+    if (source === undefined) return
     const masts = this.#model.masts
     let carried = -1
     for (let m = 0; m < masts.length; m++) if (parts.includes(masts[m]?.topPart ?? -1)) carried = m
-    if (carried < 0) return
+    // A mast brings its rig down only as a chunk; a yard, even shot off alone, brings its sail.
+    if (carried >= 0 ? parts.length < chunkPieces : !this.#model.sails.some((sail) => parts.includes(sail.yardPart))) return
     const ghost = this.#ghosts.find((g) => g.body < 0)
     if (ghost === undefined) return
     ghost.body = b
@@ -493,7 +499,7 @@ export class BrickDebris {
     ghost.rig.copyFrom(source)
     ghost.rig.setHullRigShown(false)
     masts.forEach((_, m) => ghost.rig.setMastShown(m, m === carried))
-    this.#model.sails.forEach((sail, i) => ghost.rig.setSailShown(i, parts.includes(sail.yardPart)))
+    this.#model.sails.forEach((sail, i) => ghost.rig.setSailHeld(i, parts.includes(sail.yardPart) ? "yard" : "gone"))
     ghost.rig.setDetail(view.detail)
     ghost.holder.visible = true
     this.#ghostOf[b] = this.#ghosts.indexOf(ghost)

@@ -21,10 +21,10 @@ const skyParameters = {
   rayleigh: 4,
   mieCoefficient: 0.003,
   mieDirectionalG: 0.86,
-  cloudCoverage: 0.6,
-  cloudDensity: 0.7,
+  cloudCoverage: 0.62,
+  cloudDensity: 1.0,
   cloudElevation: 0.55,
-  cloudScale: 0.00022,
+  cloudScale: 0.0004,
   cloudSpeed: 0.00004,
 } as const
 
@@ -41,10 +41,26 @@ export const createGameSky = (renderer: WebGLRenderer, sunDirection: Vector3): G
   }
   uniforms.sunPosition?.value.copy(sunDirection)
   // three's disc is ~1e4 in HDR, which bloom would smear over a third of the screen; this keeps a bright core and a modest halo.
-  // The whole dome is scaled so the glow round a low sun stays orange under ACES instead of clipping to white.
-  dome.material.fragmentShader = dome.material.fragmentShader
-    .replace("760.0 * sundisc", "25.0 * sundisc")
-    .replace("gl_FragColor = vec4( texColor, 1.0 );", "gl_FragColor = vec4( texColor * 0.55, 1.0 );")
+  // The sky runs from ~0.4 opposite the sun to over 16 beside it; it is compressed by luminance and graded toward ref-01's
+  // amber, so the glow round a low sun stays orange under ACES instead of clipping to white and the far sky is not teal.
+  // Clouds get a warm key light of their own: three lights them with the view ray's extinction, which leaves them the
+  // colour of the sky behind them at a low sun.
+  const edits: ReadonlyArray<readonly [string, string]> = [
+    ["760.0 * sundisc", "25.0 * sundisc"],
+    ["vec3 cloudColor = skyAmbient + sunColor * shade;", "vec3 cloudColor = skyAmbient * 0.3 + vec3(1.0, 0.45, 0.2) * 0.8 * (shade * 0.5 + silver * edge * 0.6);"],
+    ["cloudColor += sunColor * silver * edge * 0.6;", ""],
+    ["cloudColor *= max( dayFactor, 0.03 );", ""],
+    ["vec3 cloudAerial = mix( texColor, cloudColor, Fex );", "vec3 cloudAerial = mix( texColor, cloudColor, 0.85 );"],
+    [
+      "gl_FragColor = vec4( texColor, 1.0 );",
+      "float skyLuminance = dot( texColor, vec3( 0.2126, 0.7152, 0.0722 ) );\n" +
+        "gl_FragColor = vec4( mix( vec3( skyLuminance ), texColor, 0.3 ) * vec3( 1.0, 0.42, 0.28 ) * 1.3 / ( 1.0 + skyLuminance / 0.7 ), 1.0 );",
+    ],
+  ]
+  for (const [from, to] of edits) {
+    if (!dome.material.fragmentShader.includes(from)) throw new Error(`three's Sky shader no longer contains: ${from}`)
+    dome.material.fragmentShader = dome.material.fragmentShader.replace(from, to)
+  }
 
   const target = new WebGLCubeRenderTarget(cubeSize, { type: HalfFloatType, generateMipmaps: true })
   const capture = new Scene()

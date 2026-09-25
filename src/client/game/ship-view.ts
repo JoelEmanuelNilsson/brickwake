@@ -222,7 +222,7 @@ export class ShipView {
 
   /** Sails hang while their yard does; a mast's flags and ropes stand while its top does. */
   #syncRig() {
-    this.#model.sails.forEach((sail, i) => this.rig.setSailShown(i, sail.yardPart < 0 || this.isPresent(sail.yardPart)))
+    this.#model.sails.forEach((sail, i) => this.rig.setSailHeld(i, sail.yardPart < 0 ? "mast" : this.isPresent(sail.yardPart) ? "yard" : "gone"))
     this.#model.masts.forEach((mast, m) => this.rig.setMastShown(m, mast.topPart < 0 || this.isPresent(mast.topPart)))
   }
 

@@ -37,8 +37,12 @@ const ceiling = (galleonSpec.deckBeams.y + 1 - galleonSpec.waterline) * gridMetr
 const lanternSpots = [new Vector3(1.4, 0, -0.9)] as const
 const lanternIntensity = 9
 
-/** Within this distance of the eye at the port, metres, muzzle-flash lights fade by (distance / reach)²: the gun deck's timber is a metre from the muzzle, and the flash tuned to light hulls 10 m off would white it out. */
+/**
+ * Muzzle-flash lights within this distance of the eye at the port, metres, are out, fading back in over `flashFade`: they
+ * are this ship's own guns, just outside its hull, and their unshadowed light reaches the deck through the solid walls.
+ */
 const flashReach = 14
+const flashFade = 6
 
 /** The lower-deck gun each side views from: the one nearest amidships. */
 const viewedGun = (side: BroadsideSide): number => {
@@ -216,7 +220,7 @@ export class GunDeckLanterns {
     const blend = view.blend
     if (blend === 0) return
     for (const light of lights) {
-      const near = Math.min(1, light.position.distanceToSquared(eye) / (flashReach * flashReach))
+      const near = MathUtils.smoothstep(light.position.distanceTo(eye), flashReach, flashReach + flashFade)
       light.intensity *= 1 - blend * (1 - near)
     }
   }

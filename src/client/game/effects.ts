@@ -179,15 +179,15 @@ export class Effects {
       soft: 1.5,
     }
     this.smoke = new ParticleLayer({ ...base, capacity: 8192, texture: puff, soft: 3 }, sunDirection)
-    this.spray = new ParticleLayer({ ...base, capacity: 1024, texture: sprayTexture(), shade: [0.62, 0.7, 0.78], fadeIn: 0.02, fadeOut: 1.1, streak: 0.09, water: "vanish" }, sunDirection)
+    this.spray = new ParticleLayer({ ...base, capacity: 1024, texture: sprayTexture(), shade: [0.62, 0.7, 0.78], brightness: 0.42, fadeIn: 0.02, fadeOut: 1.1, streak: 0.09, water: "vanish" }, sunDirection)
     this.droplets = new ParticleLayer(
-      { ...base, capacity: 2048, texture: dot, soft: 0.15, sorted: false, fadeIn: 0.01, fadeOut: 0.6, streak: 0.035, water: "vanish" },
+      { ...base, capacity: 2048, texture: dot, brightness: 0.45, soft: 0.15, sorted: false, fadeIn: 0.01, fadeOut: 0.6, streak: 0.035, water: "vanish" },
       sunDirection,
     )
     const hot: Omit<ParticleLayerOptions, "capacity" | "texture"> = { ...base, blending: "additive", lit: false, sorted: false, fadeIn: 0.001, soft: 0.6 }
     this.fire = new ParticleLayer({ ...hot, capacity: 512, texture: flashTexture(), fadeOut: 1.6, endTint: [0.55, 0.22, 0.06] }, sunDirection)
     this.sparks = new ParticleLayer({ ...hot, capacity: 1024, texture: dot, fadeOut: 1.2, endTint: [0.7, 0.25, 0.05], streak: 0.012, water: "vanish", soft: 0.1 }, sunDirection)
-    this.foam = new ParticleLayer({ ...base, capacity: 768, texture: foamTexture(), lit: false, sorted: false, fadeIn: 0.05, fadeOut: 1.6, water: "ride", soft: 0.3, softLift: 0.6 }, sunDirection)
+    this.foam = new ParticleLayer({ ...base, capacity: 768, texture: foamTexture(), brightness: 0.5, lit: false, sorted: false, fadeIn: 0.05, fadeOut: 1.6, water: "ride", soft: 0.3, softLift: 0.6 }, sunDirection)
     this.chips = new ChipLayer(512)
     this.chips.onWater = (x, y, z, speed) => this.plop(x, y, z, speed)
     this.#layers = [this.foam, this.smoke, this.spray, this.droplets, this.fire, this.sparks]

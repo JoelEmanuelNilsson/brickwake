@@ -89,6 +89,8 @@ export interface ParticleLayerOptions {
   readonly fadeOut: number
   /** Light a lit layer gets on its side away from the sun; spray is brighter in shade than smoke. */
   readonly shade: readonly [number, number, number]
+  /** Scales every particle's colour: water layers are authored as white and sit at a sunlit white surface's HDR level. */
+  readonly brightness?: number
   /** Colour multiplier reached at the end of life (fire cooling to embers). */
   readonly endTint: readonly [number, number, number]
   /** Seconds of velocity a streak is stretched by. */
@@ -150,6 +152,7 @@ const fragmentShader = /* glsl */ `
   uniform vec3 uSunView;
   uniform vec3 uLightColor;
   uniform vec3 uShadeColor;
+  uniform float uBrightness;
   varying vec2 vUv;
   varying vec2 vCorner;
   varying vec4 vColor;
@@ -178,6 +181,7 @@ const fragmentShader = /* glsl */ `
       float toward = pow(max(0.0, -uSunView.z), 3.0);
       color += uLightColor * vColor.rgb * toward * (1.0 - tex.a) * 0.9;
     }
+    color *= uBrightness;
     // A round mask keeps bright additive quads from showing their square edge.
     float alpha = tex.a * vColor.a * smoothstep(1.0, 0.75, length(vUv * 2.0 - 1.0)) * vNear * soft;
     #ifdef USE_FOG
@@ -282,6 +286,7 @@ export class ParticleLayer {
           uSunView: { value: new Vector3() },
           uLightColor: { value: sunlight },
           uShadeColor: { value: new Color(...options.shade) },
+          uBrightness: { value: options.brightness ?? 1 },
           uSoft: { value: options.soft },
           uSoftLift: { value: options.softLift ?? 0 },
         },
