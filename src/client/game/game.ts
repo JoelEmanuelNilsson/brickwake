@@ -472,6 +472,7 @@ export class Game {
         this.#timeline = new SnapshotTimeline(message.simHz)
         this.#timeline.push(message.tick, message.ships, arrival)
         this.#events = new EventQueue<ServerEvent>()
+        this.#gunnery.joined()
         this.#wrecks.load(message.wrecks)
         if (this.#ocean !== undefined) this.scene.remove(this.#ocean.mesh)
         this.#ocean = new OceanSurface(message.sea, { sky: this.#sky.cube, sun: sunColor, sunDirection, flashColor }, wakePeriod)

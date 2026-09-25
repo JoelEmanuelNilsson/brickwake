@@ -10,6 +10,7 @@ import { Cannonballs, type BallEnd } from "./balls.ts"
 import type { ChaseCamera } from "./chase-camera.ts"
 import type { Effects } from "./effects.ts"
 import type { Reticle, ReticleReading } from "./reticle.ts"
+import { OwnReloads } from "./own-reloads.ts"
 import type { ShipPose } from "./timeline.ts"
 
 /** Distance along a world ray to the first part of another ship's hull within `reach`, or undefined when it meets none. */
@@ -69,8 +70,7 @@ export class Gunnery {
   #onHull = false
   readonly #hullAlong: HullAlong
   readonly #reading: ReticleReading = { side: "starboard", state: "no-aim", range: 0, reloadLeft: 0, loaded: 1 }
-  /** Reload deadlines assumed from our own orders until snapshots carry the server's. */
-  readonly #ordered = { port: Number.NEGATIVE_INFINITY, starboard: Number.NEGATIVE_INFINITY }
+  readonly #reloads = new OwnReloads()
   readonly #ship = {
     id: shipId("own"),
     position: { x: 0, y: 0, z: 0 },
@@ -138,11 +138,16 @@ export class Gunnery {
     options.scene.add(this.#ring)
   }
 
+  /** A welcome joined a room, whose clock owes nothing to the last one. */
+  joined(): void {
+    this.#reloads.joined()
+  }
+
   /** Handles the gunnery events among the server events. */
   onEvent(event: ServerEvent): void {
     this.balls.onEvent(event)
     if (event._tag === "broadsideRefused" && event.shipId === this.#ownId()) {
-      this.#ordered[event.side] = Number.NEGATIVE_INFINITY
+      this.#reloads.refused(event.side)
       this.#reticle.deny()
     }
   }
@@ -210,7 +215,7 @@ export class Gunnery {
     }
     const side = reading.side
     this.#send({ _tag: "fireBroadside", side, aimPoint: [target.x, target.y, target.z] })
-    this.#ordered[side] = this.#time + tuning.guns.reload
+    this.#reloads.ordered(side, this.#time)
     // The reading must say "reloading" from this moment, not from the next frame.
     this.#read(target, pose, this.#time)
     this.#audio.sizzle()
@@ -277,8 +282,8 @@ export class Gunnery {
     ship.velocity.x = pose.vx
     ship.velocity.y = pose.vy
     ship.velocity.z = pose.vz
-    ship.reloadedAt.port = Math.max(pose.reloadPort, this.#ordered.port)
-    ship.reloadedAt.starboard = Math.max(pose.reloadStarboard, this.#ordered.starboard)
+    ship.reloadedAt.port = this.#reloads.reloadedAt("port", pose.reloadPort)
+    ship.reloadedAt.starboard = this.#reloads.reloadedAt("starboard", pose.reloadStarboard)
     this.#starboard.set(0, 0, 1).applyQuaternion(this.#q.set(pose.qx, pose.qy, pose.qz, pose.qw))
     const toward = aim === undefined ? this.#camera?.aimDirection : this.#v.set(aim.x - pose.x, 0, aim.z - pose.z)
     r.side = toward !== undefined && toward.x * this.#starboard.x + toward.z * this.#starboard.z < 0 ? "port" : "starboard"

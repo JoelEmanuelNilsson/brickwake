@@ -313,7 +313,10 @@ const bodyStep = (ship: ShipState, env: ShipEnvironment, hull: Hull, time: numbe
     // A heeled sail presents cos(heel) of its area to the wind, which meets it at cos(heel): a knocked-down ship spills
     // its wind instead of being driven on over, the way real square-riggers survived a gust.
     const upright = Math.max(0, rotate(q, vec3(0, 1, 0)).y) ** 2
-    const drive = upright * hullResistance(sailTargetSpeed(ship.sailSet, angleOff, env.wind))
+    const target = sailTargetSpeed(ship.sailSet, angleOff, env.wind)
+    // Sail force falls as the ship gains on the wind: a ship below its target speed feels the surplus, so it gets under
+    // way in seconds, while at the target the drive meets hull resistance and top speeds and coasting stay as tuned.
+    const drive = upright * (hullResistance(target) + tuning.sail.surplusPerSpeed * Math.max(0, target - surge))
     const side = upright * tuning.sail.sideForce * ship.sailSet * windRatio * windRatio * sailSideFactor(angleOff) * leeward
     const ce = tuning.sail.centerOfEffort
     applyAt(toWorld(hullPoint), rotate(q, vec3(drive, 0, 0)))

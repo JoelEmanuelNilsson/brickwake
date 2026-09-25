@@ -85,7 +85,9 @@ export const tuning = {
     /** Sail set per sail level (0 furled, 1 half, 2 full). */
     setByLevel: [0, 0.5, 1],
     /** Sail set change per second while the crew works the sails. */
-    setRate: 0.5,
+    setRate: 1,
+    /** Extra drive per m/s the ship sails below its target speed, N; sets how fast it gets under way. */
+    surplusPerSpeed: 1e5,
     /** Drive (speed fraction) by angle off the wind, 0 = head to wind, interpolated. */
     driveByAngle: [
       { angle: 0, factor: 0.2 },

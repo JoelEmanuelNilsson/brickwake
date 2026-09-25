@@ -138,7 +138,7 @@ Sink ships to score. Sunk ships respawn.
 | Ship hull (hit box) | 28 m long, 8 m beam, −2 m to +5 m about waterline |
 | Max speed (full sail, beam reach) | 12 m/s; half sail 60 % (a target the force model is tuned to reach) |
 | Wind factor by angle to wind | ~0.2 within 45° of upwind, 1.0 beam reach, 0.8 running (target) |
-| Speed response | reaches ~63 % of target speed in ~4 s (target) |
+| Speed response | from rest, full sail reaches ~80 % of cruise speed in ~3 s on any point of sail off the wind; furled, it coasts down over seconds |
 | Turn rate | ~12°/s at full rudder and full speed (target); comes from rudder force |
 | Guns | two gun decks × 6 per side (lower ports ~1.3 m, upper ~3.3 m above waterline), ripple broadside 50 ms apart; positions live in one gun-layout module the ship spec may move |
 | Reload | 6 s per side |

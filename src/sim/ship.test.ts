@@ -52,14 +52,21 @@ describe("sailing speed", () => {
     }
   }
 
-  test("from rest, full sail on a beam reach reaches 63 % of top speed in about 4 s", () => {
-    let reached = Infinity
-    sail(calmAt(90 * deg), { rudder: 0, sail: 2 }, 10, (s, t) => {
-      if (reached === Infinity && shipForwardSpeed(ship(s)) >= 0.63 * tuning.sail.maxSpeed) reached = t
+  for (const { name, angle, cruise } of [
+    { name: "a close reach", angle: 60 * deg, cruise: 4.8 },
+    { name: "a beam reach", angle: 90 * deg, cruise: 12 },
+    { name: "a broad reach", angle: 135 * deg, cruise: 11.4 },
+    { name: "a run", angle: 180 * deg, cruise: 9.6 },
+  ]) {
+    test(`from rest, setting full sail on ${name} reaches 80 % of cruise speed within 4 s`, () => {
+      let reached = Infinity
+      sail(calmAt(angle), { rudder: 0, sail: 2 }, 10, (s, t) => {
+        if (reached === Infinity && shipForwardSpeed(ship(s)) >= 0.8 * cruise) reached = t
+      })
+      expect(reached).toBeGreaterThan(1.5)
+      expect(reached).toBeLessThan(4)
     })
-    expect(reached).toBeGreaterThan(3.2)
-    expect(reached).toBeLessThan(4.8)
-  })
+  }
 
   test("furling the sails lets a heavy ship coast down over seconds, not stop dead", () => {
     const running = sail(calmAt(90 * deg), { rudder: 0, sail: 2 }, 40)
