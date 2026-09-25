@@ -102,7 +102,10 @@ export const scenarios = {
    * to three; 30 s of results, so a test sinks the target and reads the results screen.
    */
   skirmish: { ...skirmish, ships: skirmish.ships.map((ship) => (ship.id === dummyShipId ? { ...ship, hp: duelBHp } : ship)) },
-  /** Both ships already burning, the dummy 70 m off the starboard beam: three fires along its near side, two on the player's starboard side. */
+  /**
+   * Both ships already burning, the dummy 70 m off the starboard beam: three fires along its near side and 40 HP, so a
+   * broadside sinks it; two fires on the player's starboard side.
+   */
   burning: (() => {
     const start = createMatch({
       seed: 5,
@@ -115,7 +118,7 @@ export const scenarios = {
       [scenarioShipId]: [catchFire(vec3(-5, 2, 3.8), dummyShipId, 0), catchFire(vec3(6, 3, 3.6), dummyShipId, 0)],
       [dummyShipId]: [catchFire(vec3(-8, 2, -3.8), scenarioShipId, 0), catchFire(vec3(1, 2.5, -3.8), scenarioShipId, 0), catchFire(vec3(9, 3, -3.4), scenarioShipId, 0)],
     }
-    return { ...start, ships: start.ships.map((ship) => ({ ...ship, hp: 180, fires: fires[ship.id] ?? [] })) }
+    return { ...start, ships: start.ships.map((ship) => ({ ...ship, hp: ship.id === dummyShipId ? 40 : 180, fires: fires[ship.id] ?? [] })) }
   })(),
 } as const satisfies Record<string, MatchState>
 

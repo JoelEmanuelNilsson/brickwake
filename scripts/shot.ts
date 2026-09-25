@@ -826,11 +826,19 @@ const burning = async (browser: Browser, url: string) => {
     await page.waitForTimeout(wait)
     await page.screenshot({ path: `.shots/fire-hit-${i + 1}.png` })
   }
+  const sunk = await waitFor(page, (h) => h.ships().find((s) => s.id === "dummy")?.life === "sinking", 4000)
+  check(sunk, "the broadside sinks the burning dummy")
+  await page.evaluate(() => window.brickwake?.aimView(false))
+  await page.evaluate((yaw) => window.brickwake?.orbit(yaw + 1.2, 0.35, 110), toward)
+  for (const [i, wait] of [150, 600, 2500].entries()) {
+    await page.waitForTimeout(wait)
+    await page.screenshot({ path: `.shots/fire-sink-${i + 1}.png` })
+  }
   await page.close()
   return [
     `particles with both ships burning: ${JSON.stringify(counts)}`,
     `frame waited on alone: median ${measure.median.toFixed(2)} ms, worst ${measure.worst.toFixed(2)} ms at ${measure.width}×${measure.height}`,
-    "saved .shots/fire-{own,dummy,far,hit-1..4}.png",
+    "saved .shots/fire-{own,dummy,far,hit-1..4,sink-1..3}.png",
   ].join("\n")
 }
 
