@@ -214,6 +214,18 @@ export const sailTargetSpeed = (sailSet: number, angleOff: number, wind: Wind): 
 const approach = (value: number, target: number, maxStep: number) =>
   value + Math.max(-maxStep, Math.min(maxStep, target - value))
 
+/**
+ * The arena edge is an inward current rather than a push on the hull: a ship heading out still has water past its
+ * rudder, so it can always turn back, where a force balancing its drive pinned it at zero speed with no steerage.
+ */
+const arenaCurrent = (at: Vec3): Vec3 => {
+  const arena = tuning.arena
+  const radius = Math.hypot(at.x, at.z)
+  if (radius <= arena.softRadius) return zeroVec3
+  const speed = (tuning.sail.maxSpeed * arena.currentAtRadius * (radius - arena.softRadius)) / (arena.radius - arena.softRadius)
+  return vec3((-at.x / radius) * speed, 0, (-at.z / radius) * speed)
+}
+
 const bodyStep = (ship: ShipState, env: ShipEnvironment, hull: Hull, time: number, h: number, flooded: ArrayLike<number> | undefined): ShipState => {
   const { gravity, waterDensity } = tuning.physics
   const q = ship.orientation
@@ -232,6 +244,7 @@ const bodyStep = (ship: ShipState, env: ShipEnvironment, hull: Hull, time: numbe
   const dampingPerArea = (tuning.hull.columnDampingRatio * criticalHeaveDamping) / hull.waterplaneArea
   let wetArea = 0
   let waterRise = 0
+  let radiated = 0
   // Flooded hull moves with the water it holds, so it loses the surface's damping along with its buoyancy.
   let keptArea = 0
   for (let c = 0; c < hull.columns.length; c++) {
@@ -247,18 +260,21 @@ const bodyStep = (ship: ShipState, env: ShipEnvironment, hull: Hull, time: numbe
       const wet = Math.min(1, submerged / 0.5) * kept
       const lift = waterDensity * gravity * submerged * kept * (1 - (flooded?.[c] ?? 0))
       applyAt(center, vec3(0, column.area * (lift - dampingPerArea * relativeRise * wet), 0))
+      radiated += column.area * dampingPerArea * wet * relativeRise * relativeRise
       wetArea += column.area * wet
       waterRise += column.area * wet * water.velocity.y
     }
   }
   if (wetArea > 0) {
     const heaveDamping = (tuning.hull.heaveDampingRatio * criticalHeaveDamping * wetArea) / hull.waterplaneArea
-    applyAt(com, vec3(0, -heaveDamping * (ship.velocity.y - waterRise / wetArea), 0))
+    const rise = ship.velocity.y - waterRise / wetArea
+    applyAt(com, vec3(0, -heaveDamping * rise, 0))
+    radiated += heaveDamping * rise * rise
   }
 
   for (const column of hull.columns) keptArea += column.area * buoyancyKept(ship.life, column.bottom.x, time)
 
-  const water = sampleOcean(env.sea, ship.position.x, ship.position.z, time).velocity
+  const water = add(sampleOcean(env.sea, ship.position.x, ship.position.z, time).velocity, arenaCurrent(com))
   const surfaceShare = keptArea / hull.waterplaneArea
   if (surfaceShare < 1) {
     const sink = ship.velocity.y - water.y
@@ -269,7 +285,12 @@ const bodyStep = (ship: ShipState, env: ShipEnvironment, hull: Hull, time: numbe
 
   const hullPoint = vec3(hull.centerOfMass.x, r.dragHeight, 0)
   const surge = localFlow(hullPoint).x
-  applyAt(toWorld(hullPoint), rotate(q, vec3(-hullResistance(surge), 0, 0)))
+  const pitchRate = rotateInverse(q, ship.angularVelocity).z
+  radiated += tuning.hull.pitchDamping * pitchRate * pitchRate
+  // Added resistance in waves: the energy the hull's heave and pitch pour into the sea comes out of its way, so a ship
+  // driven hard into a head sea slows until it rides the swell instead of leaping from crest to crest.
+  const waveResistance = Math.min(tuning.hull.waveResistanceShare * radiated / Math.max(1, Math.abs(surge)), hullResistance(Math.abs(surge)))
+  applyAt(toWorld(hullPoint), rotate(q, vec3(-hullResistance(surge) - Math.sign(surge) * waveResistance, 0, 0)))
 
   const keelPoint = vec3(r.lateralCenter.x, r.lateralCenter.y, 0)
   const sway = localFlow(keelPoint).z
@@ -286,19 +307,14 @@ const bodyStep = (ship: ShipState, env: ShipEnvironment, hull: Hull, time: numbe
     const angleOff = angleOffWind(angleOfDirection(forward.x, forward.z), env.wind)
     const leeward = Math.sign(dot(windVelocity(env.wind), rotate(q, vec3(0, 0, 1))))
     const windRatio = env.wind.speed / tuning.wind.referenceSpeed
-    const drive = hullResistance(sailTargetSpeed(ship.sailSet, angleOff, env.wind))
-    const side = tuning.sail.sideForce * ship.sailSet * windRatio * windRatio * sailSideFactor(angleOff) * leeward
+    // A heeled sail presents cos(heel) of its area to the wind, which meets it at cos(heel): a knocked-down ship spills
+    // its wind instead of being driven on over, the way real square-riggers survived a gust.
+    const upright = Math.max(0, rotate(q, vec3(0, 1, 0)).y) ** 2
+    const drive = upright * hullResistance(sailTargetSpeed(ship.sailSet, angleOff, env.wind))
+    const side = upright * tuning.sail.sideForce * ship.sailSet * windRatio * windRatio * sailSideFactor(angleOff) * leeward
     const ce = tuning.sail.centerOfEffort
     applyAt(toWorld(hullPoint), rotate(q, vec3(drive, 0, 0)))
     applyAt(toWorld(vec3(ce.x, ce.y, 0)), rotate(q, vec3(0, 0, side)))
-  }
-
-  const arena = tuning.arena
-  const radius = Math.hypot(com.x, com.z)
-  if (radius > arena.softRadius) {
-    const push =
-      (hullResistance(tuning.sail.maxSpeed) * arena.pushAtRadius * (radius - arena.softRadius)) / (arena.radius - arena.softRadius)
-    applyAt(com, vec3((-com.x / radius) * push, 0, (-com.z / radius) * push))
   }
 
   const bodyOmega = rotateInverse(q, ship.angularVelocity)

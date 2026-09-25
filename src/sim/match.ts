@@ -22,7 +22,7 @@ import {
 import { makeShip, shipId, stepShip, type ShipControls, type ShipId, type ShipState, type Team } from "./ship.ts"
 import { hitDamage, type DamageZone } from "./ship/damage.ts"
 import { SIM_DT, tuning } from "./tuning.ts"
-import type { Vec3 } from "./vector.ts"
+import { rotate, vec3, type Vec3 } from "./vector.ts"
 import { stepWind, type Wind } from "./wind.ts"
 import { shipFlooding, strikeWreck } from "./wreck.ts"
 
@@ -163,7 +163,7 @@ export const balanceBots = (state: MatchState, fillTo: number = tuning.bots.fill
   while (next.ships.length < fillTo) {
     const id = shipId(`bot-${next.botsJoined + 1}`)
     const { skill, rng } = drawBotSkill(next.rng)
-    next = addShip({ ...next, rng, bots: [...next.bots, { id, skill, target: undefined }], botsJoined: next.botsJoined + 1 }, spawnPoint(next, id))
+    next = addShip({ ...next, rng, bots: [...next.bots, { id, skill, target: undefined, turn: 0 }], botsJoined: next.botsJoined + 1 }, spawnPoint(next, id))
   }
   while (next.ships.length > fillTo && next.bots.length > 0) {
     const shipOf = (bot: Bot) => next.ships.find((ship) => ship.id === bot.id)
@@ -266,7 +266,7 @@ export const stepMatch = (
     helms.set(bot.id, decision.controls)
     if (decision.order) broadsides.set(bot.id, decision.order)
     else broadsides.delete(bot.id)
-    return { ...bot, target: decision.target }
+    return { ...bot, target: decision.target, turn: decision.turn }
   })
 
   let ships = state.ships.map((ship): ShipState => {
@@ -307,6 +307,16 @@ export const stepMatch = (
     ships.map((ship) => stepShip(ship, env, defaultHull, isAfloat(ship) ? shipFlooding(ship.removedParts) : undefined)),
     isAbove,
   )
+  // A ship knocked past its limit of stability founders: nobody may sail on upside down.
+  for (let index = 0; index < moved.length; index++) {
+    const ship = moved[index]!
+    if (!isAfloat(ship) || rotate(ship.orientation, vec3(0, 1, 0)).y > Math.cos(tuning.sinking.capsizeHeel)) continue
+    const floodEnd = rotate(ship.orientation, vec3(1, 0, 0)).y <= 0 ? 1 : -1
+    moved = moved.with(index, { ...ship, hp: 0, life: { _tag: "sinking", since: start, floodEnd }, controls: { rudder: 0, sail: 0 } })
+    pending = pending.filter((shot) => shot.shipId !== ship.id)
+    if (state.phase._tag === "playing") ({ ships: moved, teamSinks } = scoreSink(state.rules, { ships: moved, teamSinks }, ship.id, undefined))
+    events.push({ _tag: "shipSunk", tick: state.tick, time: start, shipId: ship.id, by: undefined })
+  }
   // A foundering hull still stops balls (they break bricks for no HP); a sunk one is under the sea.
   const flying: Array<Cannonball> = []
   const friendly = (ball: Cannonball, target: ShipState) => {

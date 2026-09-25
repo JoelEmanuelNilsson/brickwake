@@ -91,6 +91,7 @@ test("a joining client gets a welcome with the match sea, then a full snapshot e
   client.send({ _tag: "join", mode: "ffa" })
   const welcome = await client.nextOf("welcome", 0)
   expect(welcome.simHz).toBe(SIM_HZ)
+  expect(client.socket.extensions).toContain("permessage-deflate")
   expect(welcome.sea).toEqual(seas.open)
   expect(welcome.ships.map((ship) => ship.id)).toContain(welcome.shipId)
 

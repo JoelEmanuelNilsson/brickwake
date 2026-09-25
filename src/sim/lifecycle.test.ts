@@ -5,7 +5,7 @@ import { ffaRules } from "./rules.ts"
 import { duelShipIds, scenarios } from "./scenarios.ts"
 import { shipAttitude, shipId, shipPointToWorld, type ShipId, type ShipState } from "./ship.ts"
 import { SIM_DT, SIM_HZ, tuning } from "./tuning.ts"
-import { vec3 } from "./vector.ts"
+import { quatFromAxisAngle, vec3 } from "./vector.ts"
 import { makeWind } from "./wind.ts"
 
 const [a, b] = duelShipIds
@@ -161,4 +161,13 @@ test("a match restarts into warmup when its rules have one", () => {
   }
   expect([...phases]).toEqual(["warmup", "playing", "ended"])
   expect(run(state, 0.2).state.phase._tag).toBe("warmup")
+})
+
+test("a ship knocked onto its beam ends founders instead of sailing on capsized", () => {
+  const start = scenarios.duel
+  const capsized = { ...ship(start, b), orientation: quatFromAxisAngle(vec3(1, 0, 0), 80 * (Math.PI / 180)) }
+  const { state, events } = run({ ...start, ships: start.ships.map((s) => (s.id === b ? capsized : s)) }, 1)
+  expect(ship(state, b).life._tag).toBe("sinking")
+  expect(events.find((event) => event._tag === "shipSunk")).toMatchObject({ shipId: b, by: undefined })
+  expect(ship(state, a).life._tag).toBe("afloat")
 })

@@ -30,9 +30,9 @@ const minMarchStep = 0.5
 const maxMarchStep = 40
 const marchSteps = 200
 const bisections = 16
-/** Cross-range and along-range spread of a broadside per metre of range (1° cone; ±4 m across, ±18 m along at 220 m). */
-const spreadAcross = Math.tan(tuning.guns.spread)
-const spreadAlong = 18 / 220
+/** Cross-range and along-range spread of a broadside per metre of range (±4 m across, ±6 m along at 220 m). */
+const spreadAcross = Math.tan(tuning.guns.spread.traverse)
+const spreadAlong = 6 / 220
 
 const guns = { port: gunsOnSide(gunLayout, "port"), starboard: gunsOnSide(gunLayout, "starboard") }
 

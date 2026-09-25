@@ -60,7 +60,7 @@ const lineOfBattle = (() => {
   const bots: Array<Bot> = ships.slice(1).map(({ id }) => {
     const drawn = drawBotSkill(rng)
     rng = drawn.rng
-    return { id, skill: drawn.skill, target: undefined }
+    return { id, skill: drawn.skill, target: undefined, turn: 0 }
   })
   return { ...state, rng, bots, botsJoined: bots.length }
 })()

@@ -84,6 +84,8 @@ const sail = async (browser: Browser, url: string) => {
   await open.waitForTimeout(9000)
   await open.screenshot({ path: ".shots/c1-open-sea.png" })
   const openFrames = await hook(open, (h) => h.frames())
+  // A page left open keeps its ship in quick play, and a later check joining quick play would land in its room.
+  await Promise.all([page.close(), open.close()])
 
   return [
     `beam sea: heel range ${heelRange.toFixed(1)}°, camera roll ${cameraRoll.toFixed(3)}°, origin within ${worstGap.toFixed(2)} m of the drawn surface`,
@@ -423,7 +425,13 @@ const bots = async (browser: Browser, url: string) => {
   let shots = 0
   const seen = new Set<string>()
   const started = Date.now()
-  while (Date.now() - started < 45_000 && (shooters.size < 3 || hits < 3)) {
+  const movedFromStart = async () =>
+    (await hook(page, (h) => h.ships())).flatMap((s) => {
+      const before = start.find((b) => b.id === s.id)
+      return before ? [Math.hypot(s.position[0] - before.position[0], s.position[2] - before.position[2])] : []
+    })
+  // Waits on what the bots have done, not on a wall-clock span, so a slow machine or a quick first fight changes nothing.
+  while (Date.now() - started < 60_000 && (shooters.size < 3 || hits < 3 || (await movedFromStart()).filter((m) => m > 100).length < 4)) {
     const events = await hook(page, (h) => h.events())
     for (const event of events) {
       const key = JSON.stringify(event)
@@ -447,11 +455,7 @@ const bots = async (browser: Browser, url: string) => {
   check(shooters.size >= 3, `bots fire broadsides (${[...shooters].join(", ")})`)
   check(hits >= 3, `bot broadsides hit (${hits} hits seen)`)
 
-  const now = (await hook(page, (h) => h.ships())).filter((s) => s.id.startsWith("bot-"))
-  const moved = now.flatMap((s) => {
-    const before = start.find((b) => b.id === s.id)
-    return before ? [Math.hypot(s.position[0] - before.position[0], s.position[2] - before.position[2])] : []
-  })
+  const moved = await movedFromStart()
   check(moved.filter((m) => m > 100).length >= 4, `bots sail about (moved ${moved.map((m) => m.toFixed(0)).join(", ")} m)`)
   await page.keyboard.down("Tab")
   await page.waitForTimeout(300)
@@ -640,19 +644,28 @@ const gunport = async (browser: Browser, url: string) => {
   await aimAtRange(page, bearing(own.position, dummy.position), Math.hypot(dummy.position[0] - own.position[0], dummy.position[2] - own.position[2]))
   const before = await hook(page, (h) => h.aim())
 
-  const blends: Array<number> = []
-  await page.evaluate(() => window.brickwake?.gunport(true))
-  const entered = Date.now()
-  while (Date.now() - entered < 900) {
-    blends.push((await hook(page, (h) => h.camera()))?.gunport ?? Number.NaN)
-    await page.waitForTimeout(16)
-  }
+  // The blend is read in the page on every frame until it lands, so a slow machine only makes the ease take more wall time.
+  const blends = await page.evaluate(
+    () =>
+      new Promise<Array<number>>((resolve) => {
+        const seen: Array<number> = []
+        window.brickwake?.gunport(true)
+        const sample = () => {
+          const blend = window.brickwake?.camera()?.gunport ?? Number.NaN
+          seen.push(blend)
+          if (blend >= 1 || Number.isNaN(blend) || seen.length > 600) resolve(seen)
+          else requestAnimationFrame(sample)
+        }
+        requestAnimationFrame(sample)
+      }),
+  )
   const inView = await hook(page, (h) => h.camera())
   const aim = await hook(page, (h) => h.aim())
   await page.screenshot({ path: ".shots/c7-gunport.png" })
-  const between = blends.filter((b) => b > 0.05 && b < 0.95).length
+  const between = new Set(blends.filter((b) => b > 0 && b < 1)).size
   check(inView?.gunport === 1, `holding the gunport view reaches the port (blend ${inView?.gunport})`)
-  check(between >= 4, `the camera eases into the port over several frames (${between} frames between chase and port)`)
+  check(blends.every((b, i) => i === 0 || b >= blends[i - 1]!), `the ease into the port never steps back (${blends.map((b) => b.toFixed(2)).join(" ")})`)
+  check(between >= 3, `the camera eases into the port over several frames (${between} frames between chase and port)`)
   check(aim?.side === "starboard" && inView?.gunportSide === "starboard", `the view looks out of the facing side (${inView?.gunportSide}, aim ${aim?.side})`)
   const drift = before?.aimPoint != null && aim?.aimPoint != null ? Math.hypot(before.aimPoint[0] - aim.aimPoint[0], before.aimPoint[2] - aim.aimPoint[2]) : Number.NaN
   check(drift < 3, `entering the port keeps the reticle's landing point (moved ${drift.toFixed(2)} m)`)
@@ -671,7 +684,7 @@ const gunport = async (browser: Browser, url: string) => {
   const miss = ends.map((p) => Math.hypot(p[0] - target[0], p[2] - target[2])).sort((a, b) => a - b)
   check(landed && hits > 0, `the broadside from the port lands on the reticle's target (${hits} hits, median ${(miss[Math.floor(miss.length / 2)] ?? Number.NaN).toFixed(1)} m from the aim point)`)
   await page.evaluate(() => window.brickwake?.gunport(false))
-  await page.waitForTimeout(600)
+  await waitFor(page, (h) => h.camera()?.gunport === 0, 5000)
   const out = await hook(page, (h) => h.camera())
   check(out?.gunport === 0 && Math.abs(out.roll) < 1e-4, `releasing eases back to the level chase camera (blend ${out?.gunport}, roll ${out?.roll})`)
   await page.close()
@@ -682,7 +695,7 @@ const gunport = async (browser: Browser, url: string) => {
   await sea.mouse.click(640, 360)
   await sea.waitForTimeout(500)
   await sea.evaluate(() => window.brickwake?.gunport(true))
-  await sea.waitForTimeout(800)
+  check(await waitFor(sea, (h) => h.camera()?.gunport === 1, 5000), "the beam-sea view reaches the port")
   const heels: Array<number> = []
   const looks: Array<number> = []
   for (let i = 0; i < 40; i++) {
@@ -820,4 +833,4 @@ Effect.gen(function* () {
     const report = yield* Effect.promise(() => run(browser, url))
     yield* Effect.log(`${name}\n${report}`)
   }
-}).pipe(Effect.scoped, Effect.provide(Server.layer({ port: 0 })), BunRuntime.runMain)
+}).pipe(Effect.scoped, Effect.provide(Server.layer({ port: 0, quickPlaySeed: "brickwake-shots" })), BunRuntime.runMain)

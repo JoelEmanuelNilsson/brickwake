@@ -100,9 +100,13 @@ test("a broadside lands on the aim point within the per-gun spread", () => {
   for (const miss of misses) {
     const alongMiss = miss.x * along.x + miss.z * along.z
     const acrossMiss = miss.x * along.z - miss.z * along.x
-    expect(Math.abs(alongMiss)).toBeLessThan(metresPerRadian * tuning.guns.spread * 1.1)
-    expect(Math.abs(acrossMiss)).toBeLessThan(range * Math.tan(tuning.guns.spread) * 1.05)
+    expect(Math.abs(alongMiss)).toBeLessThan(metresPerRadian * tuning.guns.spread.elevation * 1.1)
+    expect(Math.abs(acrossMiss)).toBeLessThan(range * Math.tan(tuning.guns.spread.traverse) * 1.05)
   }
+  // The reticle promise: the balls land in a round patch about the aim point, not a long streak.
+  const widest = (pick: (miss: { x: number; z: number }) => number) => Math.max(...misses.map((miss) => Math.abs(pick(miss))))
+  console.log(`spread at ${range.toFixed(0)} m: ±${widest((m) => m.x * along.x + m.z * along.z).toFixed(1)} m along, ±${widest((m) => m.x * along.z - m.z * along.x).toFixed(1)} m across; ${metresPerRadian.toFixed(0)} m/rad`)
+  expect(metresPerRadian * tuning.guns.spread.elevation).toBeLessThan(1.5 * range * Math.tan(tuning.guns.spread.traverse))
   expect(new Set(misses.map((miss) => miss.x)).size).toBe(12)
   const firedAt = fired.map((event) => event.ball.firedAt)
   expect(firedAt[1]! - firedAt[0]!).toBeCloseTo(tuning.guns.rippleInterval, 9)

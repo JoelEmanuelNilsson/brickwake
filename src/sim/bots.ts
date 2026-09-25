@@ -25,6 +25,8 @@ export interface Bot {
   readonly id: ShipId
   readonly skill: BotSkill
   readonly target: ShipId | undefined
+  /** The turn it last chose, signed radians; a big turn under way is not reversed for a marginally better one. */
+  readonly turn: number
 }
 
 /** One tick's decision for a bot: helm and sail, a broadside order when a shot is on, and the enemy it chose. */
@@ -32,6 +34,7 @@ export interface BotDecision {
   readonly controls: ShipControls
   readonly order: BroadsideOrder | undefined
   readonly target: ShipId | undefined
+  readonly turn: number
 }
 
 /** Draws a bot's skill from the match RNG. */
@@ -87,7 +90,8 @@ const sideOf = (ship: ShipState, heading: number, point: Vec3): BroadsideSide =>
  * How far to turn, signed radians (positive to port). Each candidate is scored by where it puts the ship `lookahead`
  * seconds after the turn: at the standoff range with the target abeam, never in irons, clear of the edge and other hulls.
  */
-const chooseTurn = (state: MatchState, self: ShipState, heading: number, target: ShipState | undefined, skill: BotSkill) => {
+const chooseTurn = (state: MatchState, self: ShipState, heading: number, target: ShipState | undefined, bot: Bot) => {
+  const skill = bot.skill
   const b = tuning.bots
   const tau = b.lookahead
   const range = target ? distance(self, target) : 0
@@ -98,13 +102,15 @@ const chooseTurn = (state: MatchState, self: ShipState, heading: number, target:
   const margin = radius - b.edgeRadius + (b.downwindMargin * Math.max(0, self.position.x * leeward.x + self.position.z * leeward.z)) / Math.max(1, radius)
   const upwind = wrapAngle(state.wind.toward + Math.PI - heading)
   const upwindToPort = upwind < 0 ? upwind + 2 * Math.PI : upwind
+  const inIrons = angleOffWind(heading, state.wind) < b.headToWind
   let bestTurn = 0
   let bestCost = Infinity
   for (let step = 1 - headingSteps; step < headingSteps; step++) {
     const turn = (2 * Math.PI * step) / headingSteps
     const candidate = heading + turn
     // In irons, or tacking through the wind, the ship stalls with no water past the rudder: bots bear away and wear round instead.
-    if (turn > 0 ? upwindToPort <= turn : upwindToPort - 2 * Math.PI >= turn) continue
+    // A bot already head to wind may bear away to either side, else the side allowed flips as the bow swings across the wind.
+    if (!inIrons && (turn > 0 ? upwindToPort <= turn : upwindToPort - 2 * Math.PI >= turn)) continue
     const off = angleOffWind(candidate, state.wind)
     if (off < b.ironsAngle) continue
     const speed = sailTargetSpeed(1, off, state.wind)
@@ -124,6 +130,8 @@ const chooseTurn = (state: MatchState, self: ShipState, heading: number, target:
     let cost = b.weights.turn * Math.abs(turn)
     // Checking a swing already under way wastes it; without this a bot dithers between turning either way round.
     if (turn * self.angularVelocity.y < 0) cost += b.weights.reverse * Math.min(1, Math.abs(self.angularVelocity.y) / b.turnRate)
+    // Wearing round from dead downwind is as good either way; without keeping to the side chosen, the bot flips between them and runs on out.
+    if (turn * bot.turn < 0) cost += b.weights.reverse * Math.min(1, Math.abs(bot.turn) / b.commitTurn)
     cost += b.weights.wind * (1 - speed / tuning.sail.maxSpeed)
     const r = Math.hypot(x, z)
     // Beating back from the downwind edge is slow and the boundary push can pin a ship there, so bots keep off it sooner.
@@ -197,7 +205,8 @@ export const decideBotControls = (state: MatchState, shipId: ShipId): BotDecisio
   const target = chooseTarget(state, self, bot)
   const { heading } = shipAttitude(self)
   // Steer on the heading the ship will have once the rudder catches up, so it eases off instead of overshooting.
-  const error = chooseTurn(state, self, heading, target, bot.skill) - self.angularVelocity.y * tuning.bots.helmLead
+  const turn = chooseTurn(state, self, heading, target, bot)
+  const error = turn - self.angularVelocity.y * tuning.bots.helmLead
   const dead = tuning.bots.helmDeadband
   // Making sternway, the rudder acts the other way round.
   const astern = shipForwardSpeed(self) < 0 ? -1 : 1
@@ -206,5 +215,6 @@ export const decideBotControls = (state: MatchState, shipId: ShipId): BotDecisio
     controls: { rudder, sail: 2 },
     order: target ? chooseShot(state, self, heading, target, bot.skill) : undefined,
     target: target?.id,
+    turn,
   }
 }

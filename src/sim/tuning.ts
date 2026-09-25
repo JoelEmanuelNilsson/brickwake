@@ -50,11 +50,13 @@ export const tuning = {
     /** Damping of each buoyancy column by its speed through the water surface, as a fraction of critical heave damping. */
     columnDampingRatio: 0.15,
     /** Further heave damping at the centre of mass (wave radiation), same unit; roll stays lightly damped. */
-    heaveDampingRatio: 0.55,
+    heaveDampingRatio: 0.8,
     /** Roll damping beyond the columns' (bilge keels, hull form), N·m per rad/s. */
     rollDamping: 3.5e6,
     /** Pitch damping beyond the columns' (wave radiation), N·m per rad/s. */
-    pitchDamping: 4.5e7,
+    pitchDamping: 7e7,
+    /** Share of the power heave and pitch damping take that is paid from forward motion (added resistance in waves). */
+    waveResistanceShare: 1,
   },
   resistance: {
     /** Forward drag N per m/s and per (m/s)². */
@@ -143,8 +145,13 @@ export const tuning = {
     elevation: { min: -4 * degrees, max: 12 * degrees },
     /** Barrel traverse either side of straight out of the port, radians. */
     traverse: 25 * degrees,
-    /** Per-gun random error: the barrel points uniformly within a cone of this half-angle about its lay, radians. */
-    spread: 1 * degrees,
+    /**
+     * Per-gun random error: the barrel points uniformly within an ellipse of these half-angles about its lay, radians.
+     * A shallow arc turns elevation error into about four times as much range error as the same traverse error makes
+     * across, so elevation is held tighter: the balls land in a round patch about the reticle (±4 m across, ±5 m along
+     * at 220 m) instead of a long streak whose short half splashes before a waterline aim.
+     */
+    spread: { traverse: 1 * degrees, elevation: 0.25 * degrees },
     /**
      * Recoil impulse each gun gives the ship, N·s. About four times a real 24-pounder's ball-plus-powder momentum,
      * so a broadside visibly rocks the ship (about 1° of roll).
@@ -173,6 +180,8 @@ export const tuning = {
   sinking: {
     /** Seconds from HP 0 until the ship is under and out of play; it takes no orders and cannot be hit meanwhile. */
     seconds: 4,
+    /** Heel or pitch past which a ship capsizes and founders, radians. */
+    capsizeHeel: 75 * degrees,
     /** Seconds a sunk ship waits before it respawns. */
     respawnSeconds: 5,
     /** Seconds one buoyancy column takes to flood, and how much later the far end starts than the flooding end. */
@@ -192,9 +201,9 @@ export const tuning = {
     /** Ships a room holds, humans and bots together. */
     maxShips: 12,
     /** FFA: first to `scoreLimit` sinks or the most after `timeLimit` seconds. Warmup before, results after. */
-    ffa: { scoreLimit: 10, timeLimit: 8 * 60, warmupSeconds: 10, endedSeconds: 12 },
+    ffa: { scoreLimit: 8, timeLimit: 8 * 60, warmupSeconds: 10, endedSeconds: 12 },
     /** TDM, Pirates vs Navy: first side to `scoreLimit` sinks or the side with the most after `timeLimit` seconds. */
-    tdm: { scoreLimit: 20, timeLimit: 10 * 60, warmupSeconds: 10, endedSeconds: 15 },
+    tdm: { scoreLimit: 15, timeLimit: 10 * 60, warmupSeconds: 10, endedSeconds: 15 },
     /** Joining ships start on this ring about the arena centre, in the free slot farthest from others. */
     spawnRing: { radius: 260, slots: 12 },
   },
@@ -208,6 +217,8 @@ export const tuning = {
     engageBand: 200,
     /** Bots never steer closer to the wind than this; nearer, the sails barely drive and the rudder loses its grip. */
     ironsAngle: 55 * degrees,
+    /** Within this of dead upwind the bow is already stalled, so a bot may bear away to either side. */
+    headToWind: 20 * degrees,
     /** Bots steer back inside this radius, well before the arena's push. */
     edgeRadius: 420,
     /** How much sooner bots keep off the arena edge the wind blows toward, metres. */
@@ -223,6 +234,8 @@ export const tuning = {
     /** Helm: seconds of turn rate the helm allows for, and the heading error it ignores. */
     helmLead: 1.2,
     helmDeadband: 3 * degrees,
+    /** A chosen turn this large or more is fully committed to: reversing it costs the whole `reverse` weight. */
+    commitTurn: 60 * degrees,
     /** Heading costs, relative. */
     weights: { turn: 0.15, reverse: 6, wind: 0.3, edge: 8, range: 0.5, tooClose: 2, beam: 2, clearance: 4 },
     /** Each bot's skill is drawn uniformly from these ranges. */
@@ -230,14 +243,14 @@ export const tuning = {
       standoff: { min: 110, max: 170 },
       fireRange: { min: 180, max: 260 },
       lead: { min: 0.85, max: 1.05 },
-      aimError: { min: 0.04, max: 0.1 },
+      aimError: { min: 0.1, max: 0.2 },
     },
   },
   arena: {
     radius: 700,
-    /** The boundary starts pushing here and pushes harder than full sail by `radius`. */
+    /** An inward current starts here and outruns full sail well before `radius`. */
     softRadius: 640,
-    /** Push at `radius` as a multiple of full-sail drive. */
-    pushAtRadius: 2,
+    /** Current speed at `radius` as a multiple of full-sail top speed. */
+    currentAtRadius: 2,
   },
 } as const
