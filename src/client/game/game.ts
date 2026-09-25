@@ -1,30 +1,15 @@
-import {
-  ACESFilmicToneMapping,
-  Color,
-  DirectionalLight,
-  FogExp2,
-  HalfFloatType,
-  HemisphereLight,
-  LinearSRGBColorSpace,
-  PMREMGenerator,
-  Scene,
-  Vector3,
-  WebGLRenderer,
-  WebGLRenderTarget,
-} from "three"
-import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js"
-import { OutputPass } from "three/addons/postprocessing/OutputPass.js"
-import { RenderPass } from "three/addons/postprocessing/RenderPass.js"
+import { ACESFilmicToneMapping, Color, DirectionalLight, FogExp2, HemisphereLight, LinearSRGBColorSpace, PCFShadowMap, PerspectiveCamera, Scene, Vector2, Vector3, WebGLRenderer } from "three"
 import type { ScenarioName } from "../../sim/scenarios.ts"
 import type { ClientMessage, MatchPhaseSnapshot, ServerEvent, ServerMessage, WindSnapshot } from "../../protocol/messages.ts"
 import { ffaRules } from "../../sim/rules.ts"
-import { createSunsetSky } from "../lab/sky.ts"
+import { tuning } from "../../sim/tuning.ts"
 import { GameAudio } from "../audio/game-audio.ts"
 import { ChaseCamera } from "./chase-camera.ts"
 import { connect, type Connection } from "./connection.ts"
 import { Controls } from "./controls.ts"
-import { installDebugHook } from "./debug-hook.ts"
+import { type FrameMeasure, installDebugHook } from "./debug-hook.ts"
 import { Effects } from "./effects.ts"
+import { type GalleonModel, loadGalleon } from "./galleon.ts"
 import { FrameStats } from "./frame-stats.ts"
 import { Gunnery } from "./gunnery.ts"
 import { HitIndicator } from "./hit-indicator.ts"
@@ -32,9 +17,12 @@ import { Hud, type HudReading } from "./hud.ts"
 import { MatchHud, type MatchReading } from "./match-hud.ts"
 import { OceanSurface } from "./ocean.ts"
 import { Reticle } from "./reticle.ts"
+import { RenderPipeline } from "./render-pipeline.ts"
 import { ShipView } from "./ship-view.ts"
 import { SinkingShips } from "./sinking.ts"
+import { createGameSky, type GameSky } from "./sky.ts"
 import { EventQueue, SnapshotTimeline } from "./timeline.ts"
+import { WakeField, wakePeriod } from "./wake.ts"
 
 /** What every render-loop hook sees for one frame. One object, rewritten each frame. */
 export interface FrameContext {
@@ -64,14 +52,16 @@ export interface GameElements {
   readonly hits: HTMLElement
 }
 
-/** Sky colours in linear HDR, equal to the lab sky dome's constants so water, fog and sky meet without a seam. */
-const sky = {
-  horizon: new Color().setRGB(1.5, 0.56, 0.2, LinearSRGBColorSpace),
-  zenith: new Color().setRGB(0.07, 0.1, 0.15, LinearSRGBColorSpace),
-  sun: new Color().setRGB(1.8, 0.75, 0.25, LinearSRGBColorSpace),
-  sunDirection: new Vector3().setFromSphericalCoords(1, (83 * Math.PI) / 180, 1.25),
-}
+/** A low sunset sun, 5° up, and the colour its light reaches the sea with (linear HDR). */
+const sunDirection = new Vector3().setFromSphericalCoords(1, (85 * Math.PI) / 180, 1.25)
+const sunColor = new Color().setRGB(1.8, 0.75, 0.25, LinearSRGBColorSpace)
+/** Muzzle-flash light colour, as the pooled PointLights in `Effects`. */
+const flashColor = new Color(0xff9a4a)
 const fogDensity = 0.0011
+/** Half the side of the square the sun's shadow map covers around the camera's ship, metres: this ship and its close neighbours. */
+const shadowHalfWidth = 45
+/** How far up-sun the shadow camera stands, metres; the low sun's shadow box runs twice this deep. */
+const shadowReach = 150
 const maxFrameSeconds = 0.1
 
 /** How far above the highest possible crest the camera stays, metres. */
@@ -83,7 +73,15 @@ export class Game {
   readonly renderer: WebGLRenderer
   readonly hooks: Array<FrameHook> = []
   readonly eventHandlers: Array<EventHandler> = []
-  readonly #composer: EffectComposer
+  readonly #pipeline: RenderPipeline
+  readonly #sun = new DirectionalLight(0xffb27a, 3.2)
+  /** A warm light from over the camera's shoulder, as ref-01 lights the faces it shows: hulls read in colour even against the sun. */
+  readonly #fill = new DirectionalLight(0xffc896, 1.4)
+  readonly #sky: GameSky
+  readonly #wake = new WakeField()
+  readonly #galleon: GalleonModel
+  /** Built ships not in play: views are built at load, so a ship joining mid-match costs no frame. */
+  readonly #spareViews: Array<ShipView> = []
   readonly #connection: Connection
   readonly #frame: FrameContext = { dt: 0, renderTime: 0, renderTick: 0 }
   readonly #stats: FrameStats
@@ -92,6 +90,7 @@ export class Game {
   readonly #sweep = (entry: { readonly view: ShipView; seen: number }, id: string) => {
     if (entry.seen === this.#frameCount) return
     this.scene.remove(entry.view.group)
+    this.#spareViews.push(entry.view)
     this.#ships.delete(id)
   }
   readonly #applyEvent = (event: ServerEvent) => {
@@ -134,6 +133,10 @@ export class Game {
       readonly room: string | undefined
       readonly pixelRatio: number
       readonly orbit: number
+      /** MSAA samples of the scene target. */
+      readonly samples: number
+      readonly bloom: boolean
+      readonly shadows: boolean
     },
   ) {
     this.canvas = canvas
@@ -143,28 +146,48 @@ export class Game {
     this.renderer.setPixelRatio(options.pixelRatio)
     this.renderer.toneMapping = ACESFilmicToneMapping
     this.renderer.toneMappingExposure = 0.5
-    // The composer's target does the antialiasing; HDR half floats keep the sky and glints above 1 for tone mapping.
-    this.#composer = new EffectComposer(this.renderer, new WebGLRenderTarget(1, 1, { type: HalfFloatType, samples: 4 }))
+    // The frame renders several passes; counters reset once per frame so they count all of them.
+    this.renderer.info.autoReset = false
+    this.#pipeline = new RenderPipeline(this.renderer, this.scene, options.samples)
+    this.#pipeline.bloom = options.bloom
     this.#stats = new FrameStats(this.renderer)
     this.#hud = new Hud(elements.hud)
     this.#matchHud = new MatchHud(elements.match)
     this.#matchReading = { dt: 0, renderTime: 0, rules: ffaRules, phase: this.#phase, ownId: "", own: undefined, ships: this.#ships }
     this.#hitIndicator = new HitIndicator(elements.hits)
 
-    this.scene.fog = new FogExp2(sky.horizon.getHex(), fogDensity)
-    this.scene.fog.color.copy(sky.horizon)
-    const dome = createSunsetSky(sky.sunDirection)
-    this.scene.add(dome)
-    const pmrem = new PMREMGenerator(this.renderer)
-    const skyOnly = new Scene()
-    skyOnly.add(dome.clone())
-    this.scene.environment = pmrem.fromScene(skyOnly, 0, 1, 5000).texture
-    this.scene.environmentIntensity = 0.6
-    pmrem.dispose()
-    const sun = new DirectionalLight(0xffb27a, 3.2)
-    sun.position.copy(sky.sunDirection).multiplyScalar(100)
-    this.scene.add(sun, new HemisphereLight(0xffc49a, 0x0b2a30, 1.1))
-    this.effects = new Effects(this.scene, sky.sunDirection)
+    this.#sky = createGameSky(this.renderer, sunDirection)
+    this.scene.fog = new FogExp2(0, fogDensity)
+    this.scene.fog.color.copy(this.#sky.horizon)
+    this.scene.add(this.#sky.dome)
+    this.scene.environment = this.#sky.environment
+    this.scene.environmentIntensity = 0.4
+    const sun = this.#sun
+    sun.position.copy(sunDirection).multiplyScalar(shadowReach)
+    this.renderer.shadowMap.enabled = options.shadows
+    this.renderer.shadowMap.type = PCFShadowMap
+    sun.castShadow = options.shadows
+    sun.shadow.mapSize.set(2048, 2048)
+    const box = sun.shadow.camera
+    box.left = -shadowHalfWidth
+    box.right = shadowHalfWidth
+    box.top = shadowHalfWidth
+    box.bottom = -shadowHalfWidth
+    box.near = 1
+    box.far = shadowReach * 2
+    sun.shadow.bias = -0.0003
+    sun.shadow.normalBias = 0.03
+    this.scene.add(sun, sun.target, new HemisphereLight(0xffc49a, 0x0b2a30, 1.1), this.#fill)
+    this.effects = new Effects(this.scene, sunDirection)
+    this.#galleon = loadGalleon()
+    for (let i = 0; i < tuning.match.maxShips; i++) this.#spareViews.push(new ShipView(`spare ${i}`, this.#galleon))
+    // Compile every ship shader now, so the first ship in view costs no frame.
+    const warm = this.#spareViews[0]
+    if (warm !== undefined) {
+      this.scene.add(warm.group)
+      this.renderer.compile(this.scene, new PerspectiveCamera())
+      this.scene.remove(warm.group)
+    }
     this.#gunnery = new Gunnery({
       scene: this.scene,
       effects: this.effects,
@@ -172,6 +195,13 @@ export class Game {
       audio: this.audio,
       send: (message) => this.#connection.send(message),
       ownId: () => this.#shipId,
+      gunFired: (ball, muzzle) => {
+        const view = this.#ships.get(ball.shooter)?.view
+        if (view === undefined) return false
+        view.fire(ball.gun)
+        view.muzzle(ball.gun, muzzle)
+        return true
+      },
     })
     this.#sinking = new SinkingShips(this.effects, this.audio)
     this.eventHandlers.push((event) => this.#gunnery.onEvent(event))
@@ -216,6 +246,7 @@ export class Game {
       audio: () => this.audio,
       match: () => this.#matchReading,
       matchHud: () => this.#matchHud,
+      measure: (frames) => this.#measure(frames),
     })
     this.#resize()
     this.renderer.setAnimationLoop((ms) => this.#renderFrame(ms))
@@ -251,7 +282,7 @@ export class Game {
         this.#timeline.push(message.tick, message.ships, arrival)
         this.#events = new EventQueue<ServerEvent>()
         if (this.#ocean !== undefined) this.scene.remove(this.#ocean.mesh)
-        this.#ocean = new OceanSurface(message.sea, sky)
+        this.#ocean = new OceanSurface(message.sea, { sky: this.#sky.cube, sun: sunColor, sunDirection, flashColor }, wakePeriod)
         this.scene.add(this.#ocean.mesh)
         const crest = message.sea.waves.reduce((sum, wave) => sum + wave.amplitude, 0)
         const camera = this.#camera ?? new ChaseCamera(crest + cameraClearance)
@@ -298,18 +329,55 @@ export class Game {
     const width = window.innerWidth
     const height = window.innerHeight
     this.renderer.setSize(width, height, false)
-    this.#composer.setPixelRatio(this.renderer.getPixelRatio())
-    this.#composer.setSize(width, height)
+    const pixels = this.renderer.getDrawingBufferSize(new Vector2())
+    this.#pipeline.setSize(pixels.x, pixels.y)
     if (this.#camera === undefined) return
     this.#camera.camera.aspect = width / height
     this.#camera.camera.updateProjectionMatrix()
-    this.#composer.passes.length = 0
-    this.#composer.addPass(new RenderPass(this.scene, this.#camera.camera))
-    this.#composer.addPass(new OutputPass())
+  }
+
+  #measure(count: number): FrameMeasure {
+    this.renderer.setAnimationLoop(null)
+    const gl = this.renderer.getContext()
+    const pixel = new Uint8Array(4)
+    const times: Array<number> = []
+    const info = this.renderer.info
+    let draws = 0
+    let triangles = 0
+    for (let i = 0; i < count; i++) {
+      const start = performance.now()
+      this.#renderFrame(start)
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel)
+      times.push(performance.now() - start)
+      draws = info.render.calls
+      triangles = info.render.triangles
+    }
+    const pipelineStart = performance.now()
+    for (let i = 0; i < count; i++) this.#renderFrame(performance.now())
+    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel)
+    const pipelined = (performance.now() - pipelineStart) / count
+    this.renderer.setAnimationLoop((ms) => this.#renderFrame(ms))
+    times.sort((a, b) => a - b)
+    const detail = { near: 0, mid: 0, far: 0 }
+    this.#ships.forEach((entry) => {
+      if (entry.view.group.visible) detail[entry.view.detail]++
+    })
+    return {
+      median: times[Math.floor(count / 2)] ?? 0,
+      p90: times[Math.floor(count * 0.9)] ?? 0,
+      worst: times[count - 1] ?? 0,
+      pipelined,
+      width: gl.drawingBufferWidth,
+      height: gl.drawingBufferHeight,
+      draws,
+      triangles,
+      detail,
+    }
   }
 
   #renderFrame(nowMs: number) {
     const started = performance.now()
+    this.renderer.info.reset()
     const dt = Number.isNaN(this.#lastFrameMs) ? 0 : Math.min(maxFrameSeconds, (nowMs - this.#lastFrameMs) / 1000)
     this.#lastFrameMs = nowMs
     const timeline = this.#timeline
@@ -324,20 +392,32 @@ export class Game {
     frame.renderTick = renderTime * timeline.simHz
     this.#events.drain(frame.renderTick, this.#applyEvent)
 
+    const windX = Math.cos(this.#wind.toward) * this.#wind.speed
+    const windZ = -Math.sin(this.#wind.toward) * this.#wind.speed
+    const viewportHeight = this.renderer.domElement.height
     const ships = timeline.ships()
+    this.#wake.begin()
     for (let i = 0; i < ships.length; i++) {
       const id = ships[i]?.id
       if (id === undefined) continue
       let entry = this.#ships.get(id)
       if (entry === undefined) {
-        entry = { view: new ShipView(id), seen: 0 }
+        entry = { view: this.#spareViews.pop() ?? new ShipView(id, this.#galleon), seen: 0 }
+        entry.view.group.name = `ship ${id}`
         this.#ships.set(id, entry)
         this.scene.add(entry.view.group)
       }
       entry.seen = this.#frameCount
-      if (timeline.sample(id, entry.view.pose)) {
-        entry.view.update(entry.view.pose, this.#wind.toward)
-        entry.view.group.visible = this.#sinking.update(id, entry.view.pose, dt, renderTime, ocean.sea, camera)
+      const pose = entry.view.pose
+      if (timeline.sample(id, pose)) {
+        entry.view.update(pose, windX, windZ, dt, camera.camera, viewportHeight)
+        entry.view.group.visible = this.#sinking.update(id, pose, dt, renderTime, ocean.sea, camera)
+        if (pose.life === "afloat") {
+          const forwardX = 1 - 2 * (pose.qy * pose.qy + pose.qz * pose.qz)
+          const forwardZ = 2 * (pose.qx * pose.qz - pose.qw * pose.qy)
+          const flat = Math.hypot(forwardX, forwardZ) || 1
+          this.#wake.stamp(pose.x, pose.z, Math.atan2(-forwardZ, forwardX), Math.max(0, (pose.vx * forwardX + pose.vz * forwardZ) / flat))
+        }
       }
     }
     this.#ships.forEach(this.#sweep)
@@ -347,6 +427,8 @@ export class Game {
       const pose = own.view.pose
       // A foundering ship drags the camera no lower than the sea surface: the captain watches it go.
       camera.follow(pose.x, pose.life === "afloat" ? pose.y : Math.max(pose.y, 0), pose.z, dt)
+      this.#sun.target.position.set(pose.x, 0, pose.z)
+      this.#sun.position.copy(sunDirection).multiplyScalar(shadowReach).add(this.#sun.target.position)
       const forwardX = 1 - 2 * (pose.qy * pose.qy + pose.qz * pose.qz)
       const forwardZ = 2 * (pose.qx * pose.qz - pose.qw * pose.qy)
       const flat = Math.hypot(forwardX, forwardZ)
@@ -362,8 +444,15 @@ export class Game {
       this.#hud.update(reading)
       this.elements.hud.hidden = !this.#sailing
     }
-    ocean.update(renderTime, camera.camera.position.x, camera.camera.position.z)
+    this.#wake.render(this.renderer, dt)
+    ocean.update(renderTime, camera.camera.position.x, camera.camera.position.z, this.#wake.texture)
     camera.camera.updateMatrixWorld()
+    this.#sky.update(camera.camera.position, renderTime)
+    const eye = camera.camera.position
+    const viewYaw = camera.yaw + Math.PI
+    this.#fill.target.position.set(eye.x + Math.cos(viewYaw) * 10, eye.y - 4, eye.z - Math.sin(viewYaw) * 10)
+    this.#fill.position.copy(eye)
+    this.#fill.target.updateMatrixWorld()
     const manned = own !== undefined && own.view.pose.life === "afloat" && this.#phase._tag !== "ended"
     this.#gunnery.update(dt, renderTime, manned ? own.view.pose : undefined, camera, ocean.sea, this.#sailing)
     if (this.#shipId !== null) {
@@ -377,14 +466,17 @@ export class Game {
       this.#matchHud.visible = this.#sailing
     }
     this.#hitIndicator.update(dt, camera.yaw + Math.PI)
-    const windX = Math.cos(this.#wind.toward) * this.#wind.speed
-    const windZ = -Math.sin(this.#wind.toward) * this.#wind.speed
     this.effects.update(dt, renderTime, windX, windZ, ocean.sea, camera.camera)
+    const lights = this.effects.flashLights
+    for (let i = 0; i < ocean.flashes.length; i++) {
+      const light = lights[i]
+      if (light !== undefined) ocean.flashes[i]?.set(light.position.x, light.position.y, light.position.z, light.intensity)
+    }
     this.audio.update(dt, camera.camera, own?.view.pose, this.#wind.speed, this.#phase._tag)
     for (let i = 0; i < this.hooks.length; i++) this.hooks[i]?.(frame)
 
     this.#stats.beginGpu()
-    this.#composer.render(dt)
+    this.#pipeline.render(camera.camera)
     this.#stats.endGpu()
     this.#stats.record(performance.now() - started, dt * 1000)
   }

@@ -10,6 +10,7 @@ import {
   ShaderMaterial,
   UniformsLib,
   UniformsUtils,
+  Vector2,
   Vector3,
   type Camera,
   type Texture,
@@ -93,6 +94,10 @@ export interface ParticleLayerOptions {
   /** Seconds of velocity a streak is stretched by. */
   readonly streak: number
   readonly water: WaterContact
+  /** Metres over which a quad fades out as it nears whatever stands behind it (soft particles). */
+  readonly soft: number
+  /** Metres a quad counts as nearer than it is when tested against the scene, for quads lying on the water. */
+  readonly softLift?: number
 }
 
 const vertexShader = /* glsl */ `
@@ -106,6 +111,7 @@ const vertexShader = /* glsl */ `
   varying vec2 vCorner;
   varying vec4 vColor;
   varying float vNear;
+  varying float vViewDepth;
   #include <fog_pars_vertex>
   void main() {
     float size = aCentre.w;
@@ -127,6 +133,7 @@ const vertexShader = /* glsl */ `
       mvPosition.xy += along * corner.x * (size * 0.5 + speed * uStreak) + across * corner.y * size * 0.5;
     }
     gl_Position = projectionMatrix * mvPosition;
+    vViewDepth = -mvPosition.z;
     vUv = corner * 0.5 + 0.5;
     vCorner = turned;
     vColor = aColor;
@@ -147,8 +154,19 @@ const fragmentShader = /* glsl */ `
   varying vec2 vCorner;
   varying vec4 vColor;
   varying float vNear;
+  varying float vViewDepth;
+  uniform sampler2D uSceneDepth;
+  uniform vec2 uNearFar;
+  uniform float uDepthScale;
+  uniform float uSoft;
+  uniform float uSoftLift;
   #include <fog_pars_fragment>
   void main() {
+    // Particles draw after the scene, tested against its depth by hand: hidden behind it, fading as they near it.
+    float depth = texelFetch(uSceneDepth, ivec2(gl_FragCoord.xy * uDepthScale), 0).r;
+    float sceneDepth = uNearFar.x * uNearFar.y / (uNearFar.y - depth * (uNearFar.y - uNearFar.x));
+    float soft = clamp((sceneDepth - vViewDepth + uSoftLift) / uSoft, 0.0, 1.0);
+    if (soft <= 0.0) discard;
     vec4 tex = texture2D(map, vUv);
     vec3 color = vColor.rgb * tex.rgb;
     if (uLit > 0.5) {
@@ -161,7 +179,7 @@ const fragmentShader = /* glsl */ `
       color += uLightColor * vColor.rgb * toward * (1.0 - tex.a) * 0.9;
     }
     // A round mask keeps bright additive quads from showing their square edge.
-    float alpha = tex.a * vColor.a * smoothstep(1.0, 0.75, length(vUv * 2.0 - 1.0)) * vNear;
+    float alpha = tex.a * vColor.a * smoothstep(1.0, 0.75, length(vUv * 2.0 - 1.0)) * vNear * soft;
     #ifdef USE_FOG
       float fogFactor = 1.0 - exp(-fogDensity * fogDensity * vFogDepth * vFogDepth);
       if (uAdditive > 0.5) alpha *= 1.0 - fogFactor;
@@ -170,6 +188,17 @@ const fragmentShader = /* glsl */ `
     gl_FragColor = vec4(color, alpha);
   }
 `
+
+/** Camera layer of alpha-blended particles: drawn after the scene, at half resolution, tested against the scene's depth. */
+export const particleLayer = 1
+/** Camera layer of additive particles (fire, sparks): drawn at full resolution, where their thin bright shapes need it. */
+export const glowLayer = 2
+
+/**
+ * The scene depth every particle layer is tested against, the camera's near and far planes, and scene-depth texels per
+ * particle pixel (2 when particles draw at half resolution); the render pipeline sets them each frame.
+ */
+export const particleScene = { depth: { value: null as Texture | null }, nearFar: { value: new Vector2(0.5, 6000) }, depthScale: { value: 1 } }
 
 /** Sunlit colour for lit layers, linear. */
 const sunlight = new Color(1.35, 1.0, 0.72)
@@ -253,6 +282,8 @@ export class ParticleLayer {
           uSunView: { value: new Vector3() },
           uLightColor: { value: sunlight },
           uShadeColor: { value: new Color(...options.shade) },
+          uSoft: { value: options.soft },
+          uSoftLift: { value: options.softLift ?? 0 },
         },
       ]),
       transparent: true,
@@ -262,8 +293,12 @@ export class ParticleLayer {
     })
     const uniforms = material.uniforms
     if (uniforms.map !== undefined) uniforms.map.value = options.texture
+    uniforms.uSceneDepth = particleScene.depth
+    uniforms.uNearFar = particleScene.nearFar
+    uniforms.uDepthScale = particleScene.depthScale
     this.mesh = new Mesh(geometry, material)
     this.mesh.frustumCulled = false
+    this.mesh.layers.set(options.blending === "additive" ? glowLayer : particleLayer)
     this.mesh.renderOrder = options.blending === "additive" ? 3 : 2
   }
 

@@ -28,5 +28,8 @@ if (scenario !== null && !isScenario(scenario)) {
     // Starting camera angle off the stern in degrees, for screenshots from the side or bow.
     orbit: (Number(params.get("orbit") ?? 0) * Math.PI) / 180,
     pixelRatio: Math.min(window.devicePixelRatio, Number(params.get("dpr") ?? 1.5)),
+    samples: Number(params.get("msaa") ?? 4),
+    bloom: params.get("bloom") !== "0",
+    shadows: params.get("shadows") !== "0",
   })
 }

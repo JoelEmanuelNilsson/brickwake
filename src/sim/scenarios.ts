@@ -1,7 +1,8 @@
-import { createMatch, type MatchState } from "./match.ts"
+import { balanceBots, createMatch, type MatchState } from "./match.ts"
 import { ffaRules, type MatchRules } from "./rules.ts"
 import { seas, swell } from "./ocean.ts"
 import { shipId, type ShipId } from "./ship.ts"
+import { tuning } from "./tuning.ts"
 import { makeWind } from "./wind.ts"
 
 /** The ship every single-ship scenario spawns, at the origin heading +x. */
@@ -56,6 +57,8 @@ export const scenarios = {
    * Two captains in flat water 150 m apart, the second off the first's starboard beam at 15 HP; a 30 s FFA match with 6 s of
    * results and no warmup. Two clients joining with the same `room` share it.
    */
+  /** A full room: the player at the arena centre and bots on the spawn ring filling it to the most ships a room holds. */
+  armada: balanceBots(createMatch({ seed: 7, sea: seas.open, wind: makeWind({ toward: -quarter, speed: 14, gustiness: 1 }), ships: solo, rules: practice }), tuning.match.maxShips),
   duel: { ...duel, ships: duel.ships.map((ship) => (ship.id === duelShipIds[1] ? { ...ship, hp: duelBHp } : ship)) },
 } as const satisfies Record<string, MatchState>
 
