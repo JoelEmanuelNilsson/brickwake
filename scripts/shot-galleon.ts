@@ -1,6 +1,8 @@
 import { chromium } from "playwright"
 
-const cameras = ["ref-01", "ref-02", "side", "bow", "stern", "top", "guns"] as const
+const cameras = ["ref-01", "ref-02", "side", "bow", "stern", "top", "guns", "rig", "rig-bow"] as const
+// Sail levels and liveries: the rig animates to a new level in about two seconds.
+const rigShots = [["rig", "sail=1", "sail-1"], ["rig", "sail=0", "sail-0"], ["rig-bow", "livery=navy-lion", "navy-lion"], ["rig-bow", "livery=navy-fleur", "navy-fleur"], ["rig-bow", "livery=ffa-1", "ffa"]] as const
 const lodShots = [["lod-mid", "near"], ["lod-mid", "mid"], ["lod-far", "mid"], ["lod-far", "far"]] as const
 
 const freePort = async () => {
@@ -34,7 +36,7 @@ try {
     })
     await page.goto(`${url}?ship=galleon&camera=ref-01`)
     await page.waitForFunction(() => window.brickLab?.ready === true, undefined, ready)
-    const stats = await page.evaluate(() => (["near", "mid", "far"] as const).map((detail) => ({ detail, ...window.brickLab?.stats(detail) })))
+    const stats = await page.evaluate(() => (["near", "mid", "far"] as const).map((detail) => ({ detail, ...window.brickLab?.stats(detail), rig: window.brickLab?.rigStats(detail) })))
     console.log(JSON.stringify({ stats, buildMs: await page.evaluate(() => window.brickLab?.buildMs) }))
     for (const camera of cameras) {
       await page.evaluate((name) => window.brickLab?.setCamera(name), camera)
@@ -43,6 +45,15 @@ try {
       console.log(`saved .shots/galleon-${camera}.png`)
     }
     await page.close()
+    for (const [camera, query, name] of rigShots) {
+      const shot = await browser.newPage({ viewport: { width: 1600, height: 900 } })
+      await shot.goto(`${url}?ship=galleon&camera=${camera}&${query}`)
+      await shot.waitForFunction(() => window.brickLab?.ready === true, undefined, ready)
+      await shot.waitForTimeout(2500)
+      await shot.screenshot({ path: `.shots/galleon-${name}.png` })
+      console.log(`saved .shots/galleon-${name}.png`)
+      await shot.close()
+    }
     for (const [camera, detail] of lodShots) {
       const lod = await browser.newPage({ viewport: { width: 1600, height: 900 } })
       await lod.goto(`${url}?ship=galleon&camera=${camera}&detail=${detail}`)

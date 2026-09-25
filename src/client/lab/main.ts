@@ -18,7 +18,10 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { type BrickDetail, type BrickShipStats, BrickShipMesh, createBrickLibrary } from "../bricks/brick-ship-mesh.ts"
 import { generateShip } from "../../sim/ship/generate.ts"
 import { partIds } from "../../sim/ship/parts.ts"
+import { rigLayout } from "../../sim/ship/rig.ts"
 import { galleonSpec } from "../../sim/ship/spec.ts"
+import { ffaColors, ffaLivery, navyFleurLivery, navyLionLivery, pirateLivery, type SailLivery } from "../rig/sail-livery.ts"
+import { buildRigGeometry, type SailLevel, ShipRig } from "../rig/ship-rig.ts"
 import { shipPlacements } from "../bricks/ship-placements.ts"
 import { createOceanStandIn } from "./ocean.ts"
 import { buildSampler, samplerSize } from "./sampler.ts"
@@ -35,14 +38,16 @@ export const samplerCameras = {
 
 /** Fixed galleon cameras in sim ship space (metres; bow +x, starboard +z, stern at x ≈ -14). */
 export const galleonCameras = {
-  "ref-01": { position: [-25, 4.5, 17], target: [2, 2.4, -1], fov: 45 },
-  "ref-02": { position: [-17.5, 1.6, 10.5], target: [4, 2.6, 4.6], fov: 55 },
+  "ref-01": { position: [-25, 4.5, 17], target: [2, 5.5, -1], fov: 45 },
+  "ref-02": { position: [-17.5, 1.6, 10.5], target: [4, 4.6, 4.6], fov: 60 },
   side: { position: [2, 3.5, 32], target: [1, 2.2, 0], fov: 50 },
   bow: { position: [24, 5, 14], target: [3, 2, 0], fov: 45 },
   top: { position: [0.5, 42, 0.01], target: [0.5, 0, 0], fov: 50 },
   fleet: { position: [-25, 4.5, 17], target: [2, 2.4, -1], fov: 45 },
   stern: { position: [-26, 7, 3], target: [0, 4, 0], fov: 40 },
   guns: { position: [-7, 2.2, 9.5], target: [2, 2.4, 3.8], fov: 50 },
+  rig: { position: [-34, 7, 30], target: [1.5, 9.5, 0], fov: 45 },
+  "rig-bow": { position: [36, 5, 26], target: [0, 9.5, 0], fov: 45 },
   // On the ref-01 line at the near→mid and mid→far switch distances for a 900 px tall viewport.
   "lod-mid": { position: [-35.4, 5.3, 23.9], target: [2, 2.4, -1], fov: 45 },
   "lod-far": { position: [-111, 11.2, 74.3], target: [2, 2.4, -1], fov: 45 },
@@ -65,7 +70,15 @@ export interface BrickLabHook {
   readonly camera: string
   readonly shapeCount: number
   readonly buildMs: number
+  /** Hull and rig counts together at `detail`. */
   stats(detail?: BrickDetail): BrickShipStats
+  /** The cosmetic rig's own share of `stats`. */
+  rigStats(detail?: BrickDetail): { readonly draws: number; readonly triangles: number }
+  setSailLevel(level: SailLevel): void
+  /** Fly `pirate`, `navy-lion`, `navy-fleur` or `ffa-<n>` on every ship. */
+  setLivery(name: string): void
+  /** World wind velocity in m/s. */
+  setWind(x: number, z: number): void
   /** Detail level and distance from the camera of every ship in the scene. */
   fleet(): ReadonlyArray<{ readonly detail: BrickDetail; readonly distance: number; readonly triangles: number; readonly draws: number }>
   meshIds(): ReadonlyArray<string>
@@ -114,10 +127,10 @@ const key = new DirectionalLight(0xffcfa0, 5)
 key.position.set(-7, 12, -20)
 key.castShadow = true
 key.shadow.mapSize.set(4096, 4096)
-key.shadow.camera.left = -16
-key.shadow.camera.right = 16
-key.shadow.camera.top = 16
-key.shadow.camera.bottom = -16
+key.shadow.camera.left = -24
+key.shadow.camera.right = 24
+key.shadow.camera.top = 24
+key.shadow.camera.bottom = -24
 key.shadow.camera.near = 1
 key.shadow.camera.far = 60
 key.shadow.bias = -0.0002
@@ -140,6 +153,22 @@ const buildStart = performance.now()
 const ship = new BrickShipMesh(library, built.placements, built.plugs)
 const buildMs = performance.now() - buildStart
 const ships: Array<BrickShipMesh> = [ship]
+const rigGeometry = galleon ? buildRigGeometry(rigLayout(galleonSpec)) : undefined
+const liveries: ReadonlyArray<SailLivery> = [pirateLivery, navyLionLivery, navyFleurLivery, ...ffaColors.map(ffaLivery)]
+const liveryNamed = (name: string) => liveries.find((l) => l.name === name) ?? (name.startsWith("ffa-") ? ffaLivery(ffaColors[Number(name.slice(4)) % ffaColors.length] ?? "#b3170c") : undefined)
+const startLivery = liveryNamed(params.get("livery") ?? "pirate") ?? pirateLivery
+const rigs = new Map<BrickShipMesh, ShipRig>()
+const rig = (s: BrickShipMesh) => {
+  if (rigGeometry === undefined) return
+  const r = new ShipRig(rigGeometry, startLivery)
+  s.root.add(r.root)
+  rigs.set(s, r)
+}
+rig(ship)
+const wind = { x: Number(params.get("windX") ?? 9), z: Number(params.get("windZ") ?? 4) }
+const sailParam = Number(params.get("sail") ?? 2)
+const startLevel: SailLevel = sailParam === 0 || sailParam === 1 ? sailParam : 2
+for (const r of rigs.values()) r.setSailLevel(startLevel)
 const forcedDetail = params.get("detail")
 const fixedDetail: BrickDetail | undefined = forcedDetail === "near" || forcedDetail === "mid" || forcedDetail === "far" ? forcedDetail : undefined
 if (galleon) {
@@ -148,6 +177,7 @@ if (galleon) {
   const look = new Vector3().fromArray(galleonCameras.fleet.target).sub(eye).setY(0).normalize()
   for (const [distance, bearing, heading] of fleetLayout.slice(0, fleet - 1)) {
     const copy = new BrickShipMesh(library, built.placements, built.plugs)
+    rig(copy)
     const along = look.clone().applyAxisAngle(new Vector3(0, 1, 0), MathUtils.degToRad(-bearing))
     copy.root.position.copy(eye).addScaledVector(along, distance).setY(0)
     copy.root.rotation.y = MathUtils.degToRad(heading)
@@ -206,18 +236,30 @@ const updateDetail = () => {
   for (const s of ships) {
     if (fixedDetail === undefined) s.updateDetail(camera, renderer.domElement.height)
     else s.setDetail(fixedDetail)
+    rigs.get(s)?.setDetail(s.detail)
   }
+}
+
+const fullStats = (s: BrickShipMesh, detail: BrickDetail = s.detail): BrickShipStats => {
+  const hull = s.stats(detail)
+  const r = rigs.get(s)?.stats(detail) ?? { draws: 0, triangles: 0 }
+  return { ...hull, draws: hull.draws + r.draws, triangles: hull.triangles + r.triangles }
 }
 
 const showStats = () => {
   updateDetail()
-  const { parts, studs, draws, triangles } = ship.stats()
-  const total = ships.reduce((sum, s) => sum + s.stats().triangles, 0)
+  const { parts, studs, draws, triangles } = fullStats(ship)
+  const total = ships.reduce((sum, s) => sum + fullStats(s).triangles, 0)
   statsPanel.textContent = `ship lab · ${cameraName}${fleet > 1 ? ` · ${fleet} ships, ${(total / 1e6).toFixed(2)}M tris` : ""}\n${partIds.length} shapes · ${parts} parts · ${studs} studs · ${ship.detail}\n${draws} draws · ${(triangles / 1000).toFixed(1)}k tris · generate ${generateMs.toFixed(1)} ms · build ${buildMs.toFixed(1)} ms`
 }
 showStats()
 
+let last = performance.now()
 const render = () => {
+  const now = performance.now()
+  const dt = Math.min((now - last) / 1000, 0.1)
+  last = now
+  for (const r of rigs.values()) r.update(dt, wind.x, wind.z)
   updateDetail()
   composer.render()
 }
@@ -237,8 +279,20 @@ window.brickLab = {
   },
   shapeCount: partIds.length,
   buildMs,
-  stats: (detail) => ship.stats(detail),
-  fleet: () => ships.map((s) => ({ detail: s.detail, distance: camera.position.distanceTo(s.root.position), ...s.stats() })),
+  stats: (detail) => fullStats(ship, detail),
+  rigStats: (detail) => rigs.get(ship)?.stats(detail) ?? { draws: 0, triangles: 0 },
+  setSailLevel: (level) => {
+    for (const r of rigs.values()) r.setSailLevel(level)
+  },
+  setLivery: (name) => {
+    const livery = liveryNamed(name)
+    if (livery !== undefined) for (const r of rigs.values()) r.setLivery(livery)
+  },
+  setWind: (x, z) => {
+    wind.x = x
+    wind.z = z
+  },
+  fleet: () => ships.map((s) => ({ detail: s.detail, distance: camera.position.distanceTo(s.root.position), ...fullStats(s) })),
   meshIds: () => ship.root.children.map((child) => child.uuid),
   setCamera: (name) => {
     applyCamera(name)

@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test"
 import { generateShip } from "../../sim/ship/generate.ts"
+import { rigLayout } from "../../sim/ship/rig.ts"
 import { galleonSpec } from "../../sim/ship/spec.ts"
+import { buildRigGeometry } from "../rig/ship-rig.ts"
 import { BrickShipMesh, createBrickLibrary } from "./brick-ship-mesh.ts"
 import { shipPlacements } from "./ship-placements.ts"
 
@@ -8,13 +10,14 @@ const ship = generateShip(galleonSpec)
 const { placements, partIndex, plugs } = shipPlacements(galleonSpec, ship)
 const mesh = new BrickShipMesh(createBrickLibrary(), placements, plugs)
 
-test("the full galleon body fits the per-ship budget at near detail and leaves room for the rig", () => {
+test("the full galleon with masts, sails and rigging fits the per-ship budget at near detail", () => {
   const near = mesh.stats("near")
   expect(placements.length).toBeLessThan(ship.parts.length)
   expect(new Set(partIndex).size).toBe(placements.length)
-  // 300k triangles and 45 draws per ship, less headroom for ticket 11's masts, yards and sails.
-  expect(near.triangles).toBeLessThanOrEqual(250_000)
-  expect(near.draws).toBeLessThanOrEqual(38)
+  const rig = buildRigGeometry(rigLayout(galleonSpec))
+  const rigTriangles = [rig.sails, rig.flags, rig.lines].reduce((n, g) => n + (g.getIndex()?.count ?? 0) / 3, 0)
+  expect(near.triangles + rigTriangles).toBeLessThanOrEqual(300_000)
+  expect(near.draws + 3).toBeLessThanOrEqual(45)
 })
 
 test("mid and far detail cost a quarter of near or less, and far drops the gun deck interior for port plugs", () => {

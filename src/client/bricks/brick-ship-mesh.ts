@@ -60,7 +60,7 @@ export const createBrickLibrary = (): BrickLibrary => {
     shader.vertexShader = shader.vertexShader.replace("#include <common>", `#include <common>\n${finishVaryings}`).replace("#include <color_vertex>", finishFromColors)
     shader.fragmentShader = shader.fragmentShader
       .replace("#include <common>", `#include <common>\n${finishVaryings}`)
-      .replace("#include <metalnessmap_fragment>", "#include <metalnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.34, vPearl);\nmetalnessFactor = mix(metalnessFactor, 0.45, vPearl);")
+      .replace("#include <metalnessmap_fragment>", "#include <metalnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.3, vPearl);\nmetalnessFactor = mix(metalnessFactor, 0.6, vPearl);")
       .replace("#include <emissivemap_fragment>", `#include <emissivemap_fragment>\n${glowFragment}`)
   }
   plastic.customProgramCacheKey = () => "brick-plastic-finish"
