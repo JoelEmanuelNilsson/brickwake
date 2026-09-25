@@ -1,6 +1,6 @@
 import type { MatchPhaseSnapshot, ServerEvent, ShipSnapshot } from "../../protocol/messages.ts"
 import type { MatchRules } from "../../sim/rules.ts"
-import { tuning } from "../../sim/tuning.ts"
+import { SIM_DT, tuning } from "../../sim/tuning.ts"
 import { shipName } from "./names.ts"
 import type { ShipPose } from "./timeline.ts"
 
@@ -33,7 +33,7 @@ const markup = /* html */ `
     </table>
     <div class="mh-board-foot" data-mh="board-foot"></div>
   </div>
-  <div class="mh-ship hud-panel">
+  <div class="mh-ship hud-panel" data-mh="ship">
     <div class="hud-label">Hull</div>
     <div class="mh-hull-value" data-mh="hull-value">100</div>
     <div class="mh-hull"><div class="mh-hull-fill" data-mh="hull"></div></div>
@@ -96,6 +96,8 @@ const feedSeconds = 7
 const feedLines = 5
 /** Seconds the "battle begins" banner holds after warmup. */
 const startBannerSeconds = 2.2
+/** Seconds the banner tells a captain a sink repaired their ship. */
+const healBannerSeconds = 2.5
 /** Seconds the banner tells a captain the sides were evened and they changed sides. */
 const sideBannerSeconds = 4
 /** Scoreboard rebuilds per second while it shows. */
@@ -139,6 +141,7 @@ export class MatchHud {
   readonly #boardScore: HTMLElement
   readonly #boardPirates: HTMLElement
   readonly #boardNavy: HTMLElement
+  readonly #ship: HTMLElement
   readonly #hull: HTMLElement
   readonly #hullValue: HTMLElement
   readonly #port: HTMLElement
@@ -154,6 +157,8 @@ export class MatchHud {
   #playingSince = Number.NaN
   #ownTeam: ShipPose["team"] | undefined
   #sideChangedAt = Number.NaN
+  #healedAt = Number.NaN
+  #healed = 0
   #lastPhase: MatchPhaseSnapshot["_tag"] | undefined
 
   constructor(root: HTMLElement) {
@@ -177,6 +182,7 @@ export class MatchHud {
     this.#boardScore = find(root, "board-score")
     this.#boardPirates = find(root, "board-pirates")
     this.#boardNavy = find(root, "board-navy")
+    this.#ship = find(root, "ship")
     this.#hull = find(root, "hull")
     this.#hullValue = find(root, "hull-value")
     this.#port = find(root, "port")
@@ -222,6 +228,14 @@ export class MatchHud {
     if (event._tag === "shipSunk") {
       this.#sunkBy.set(event.shipId, event.by)
       this.#feedLine(event.shipId, event.by)
+    }
+    if (event._tag === "shipHealed" && event.shipId === this.#ownId) {
+      this.#healedAt = event.tick * SIM_DT
+      this.#healed = Math.round(event.healed)
+      this.#ship.animate(
+        [{ boxShadow: "0 0 0 2px #8fd694, 0 0 28px rgba(143, 214, 148, 0.75)" }, { boxShadow: "0 6px 24px rgba(0, 0, 0, 0.35)" }],
+        { duration: 1400, easing: "ease-out" },
+      )
     }
   }
 
@@ -305,6 +319,10 @@ export class MatchHud {
       title = own.life === "sinking" ? "Your ship is going down" : "Sunk"
       sub = `${by ? `Sunk by ${shipName(by)} · ` : ""}Back on the water in ${Math.max(0, Math.ceil(respawnAt - renderTime))}`
       tone = "danger"
+    } else if (renderTime - this.#healedAt < healBannerSeconds) {
+      title = "Hull repaired"
+      sub = `+${this.#healed} HP for the sink`
+      tone = "heal"
     } else if (team && renderTime - this.#sideChangedAt < sideBannerSeconds) {
       title = "Sides evened"
       sub = `You now sail with the ${teamNames[team]}`

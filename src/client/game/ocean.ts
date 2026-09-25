@@ -157,6 +157,7 @@ const fragmentShader = /* glsl */ `
   uniform float wakePeriod;
   uniform float rippleTime;
   uniform float waveHeight;
+  uniform float waveSteepness;
   uniform vec3 sunColor;
   uniform vec3 sunDirection;
   uniform vec4 flashes[FLASHES]; // position, intensity (cd)
@@ -194,7 +195,9 @@ const fragmentShader = /* glsl */ `
     vec3 water = mix(deep, shallow, scatter) + sunColor * 0.012 * max(dot(normal, sunDirection), 0.0);
 
     float foamNoise = texture2D(ripples, vWorld.xz / 5.0 + rippleTime * 0.02).x;
-    float foamMask = smoothstep(0.9, 0.75, vJacobian) * smoothstep(0.55, 0.9, crest);
+    // Folding is measured against the sea's own steepness, so the sharpest crests of any sea state foam.
+    float fold = (1.0 - vJacobian) / max(waveSteepness, 0.001);
+    float foamMask = smoothstep(0.44, 1.09, fold) * smoothstep(0.55, 0.9, crest);
     float crestFoam = smoothstep(0.45, 0.75, foamMask * (0.35 + foamNoise)) * (1.0 - smoothstep(250.0, 900.0, distance));
     // Hull and wake foam: dense where fresh, breaking into lace as it thins.
     float laid = texture2D(wake, vWorld.xz / wakePeriod).r * (1.0 - smoothstep(260.0, 420.0, distance));
@@ -256,6 +259,7 @@ export class OceanSurface {
           waveCount: { value: sea.waves.length },
           rippleTime: { value: 0 },
           waveHeight: { value: sea.waves.reduce((sum, wave) => sum + wave.amplitude, 0) },
+          waveSteepness: { value: sea.waves.reduce((sum, wave) => sum + (wave.sharpness * 2 * Math.PI * wave.amplitude) / wave.wavelength, 0) },
           sunColor: { value: lighting.sun },
           sunDirection: { value: lighting.sunDirection },
           flashColor: { value: lighting.flashColor },

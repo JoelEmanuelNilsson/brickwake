@@ -1,9 +1,11 @@
 import type { ServerEvent, ServerMessage } from "../../protocol/messages.ts"
 import { ShipDamage, type DamageGraph } from "../../sim/ship/damage.ts"
 
-/** One ship's damage as this client knows it. A new ship life gets a new `Wreck`, so views can tell a repair by identity. */
+/** One ship's damage as this client knows it. A new ship life or a repair gets a new `Wreck`, so views can tell it by identity. */
 export interface Wreck {
   readonly damage: ShipDamage
+  /** Parts knocked out, as in the server's `removedParts`. */
+  readonly removed: Array<number>
   /** Parts knocked out or fallen off, in the order they went. Only ever grows. */
   readonly gone: Array<number>
 }
@@ -43,6 +45,12 @@ export class Wrecks {
       case "shipLeft":
         this.#byShip.delete(event.shipId)
         return
+      case "shipHealed": {
+        const kept = this.#byShip.get(event.shipId)?.removed.slice(0, event.keptParts) ?? []
+        this.#byShip.delete(event.shipId)
+        if (kept.length > 0) this.#strike(event.shipId, kept)
+        return
+      }
     }
   }
 
@@ -54,10 +62,11 @@ export class Wrecks {
   #strike(shipId: string, removed: ReadonlyArray<number>) {
     let wreck = this.#byShip.get(shipId)
     if (wreck === undefined) {
-      wreck = { damage: new ShipDamage(this.#graph), gone: [] }
+      wreck = { damage: new ShipDamage(this.#graph), removed: [], gone: [] }
       this.#byShip.set(shipId, wreck)
     }
     const detached = wreck.damage.apply(removed)
+    wreck.removed.push(...removed)
     wreck.gone.push(...removed, ...detached)
     return detached
   }

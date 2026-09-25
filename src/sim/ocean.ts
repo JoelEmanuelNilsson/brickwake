@@ -146,14 +146,14 @@ export const sampleOcean = (sea: SeaState, x: number, z: number, t: number): Oce
   return { height, normal, velocity: vec3(vx, vy, vz) }
 }
 
-/** Named seas. `open` is the match sea: heavy swell sized for the reference images. */
+/** Named seas. `open` is the match sea: a moderate swell, a quarter of the heavy one sized for the reference images. */
 export const seas = {
   calm: makeSea([]),
   open: makeSea([
-    { direction: 0, wavelength: 96, amplitude: 1.5, sharpness: 1, phase: 0 },
-    { direction: 0.45, wavelength: 61, amplitude: 0.6, sharpness: 1, phase: 1.7 },
-    { direction: -0.6, wavelength: 37, amplitude: 0.25, sharpness: 1, phase: 4.1 },
-    { direction: 1.2, wavelength: 19, amplitude: 0.08, sharpness: 1, phase: 2.6 },
+    { direction: 0, wavelength: 96, amplitude: 0.375, sharpness: 1, phase: 0 },
+    { direction: 0.45, wavelength: 61, amplitude: 0.15, sharpness: 1, phase: 1.7 },
+    { direction: -0.6, wavelength: 37, amplitude: 0.0625, sharpness: 1, phase: 4.1 },
+    { direction: 1.2, wavelength: 19, amplitude: 0.02, sharpness: 1, phase: 2.6 },
   ]),
 } as const satisfies Record<string, SeaState>
 

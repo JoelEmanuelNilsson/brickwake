@@ -41,9 +41,11 @@ test("the normal is a unit vector perpendicular to the surface", () => {
   }
 })
 
-test("the match sea is heavy swell: crests over a metre, periods of several seconds", () => {
+test("the match sea is a moderate swell: under a metre and a half trough to crest, periods of several seconds", () => {
   const heights = points.map(({ x, z, t }) => sampleOcean(seas.open, x, z, t).height)
-  expect(Math.max(...heights) - Math.min(...heights)).toBeGreaterThan(2.5)
+  const range = Math.max(...heights) - Math.min(...heights)
+  expect(range).toBeGreaterThan(0.6)
+  expect(range).toBeLessThan(1.5)
   const main = seas.open.waves[0]
   expect(main && (2 * Math.PI) / waveAngularFrequency(main)).toBeGreaterThan(7)
 })

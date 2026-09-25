@@ -57,7 +57,9 @@ each other and with what the player sees.
   `sampleOcean(x, z, t) → { height, normal, velocity }` shared by sim and client.
   The client's water mesh and the sim's buoyancy and splashes use the same function,
   so a ship sits in the water it is drawn in and a ball splashes where the drawn
-  surface is. Swell sized for the refs (heavy seas), set by feel, not capped at 1 m.
+  surface is. The match sea is a moderate swell (about 0.9 m trough to crest), a
+  quarter of the heavy seas sized for the refs; the beam- and head-sea scenarios keep
+  the heavy swell to test sea-keeping.
 - Buoyancy: a fixed set of sample points along the hull. Each submerged point pushes
   up by its depth and damps by its vertical velocity relative to the water. Heave,
   pitch and roll follow from the waves; a ship rides over swells and rolls in a beam
@@ -145,7 +147,7 @@ Sink ships to score. Sunk ships respawn.
 | Muzzle speed / gravity | 90 m/s / 9.81 m/s² |
 | Elevation / traverse | −4° … +12° / ±25° from perpendicular |
 | Per-gun spread | ±1° traverse, ±0.25° elevation, from the match's seeded RNG: a round patch about the reticle (±4 m across, ±6 m along at 220 m) |
-| Damage | per ball: hull 5, upper works 2, sails 1; hull 225 HP (~49 hits to sink); a hull hit knocks out ≤ 8 bricks, upper works ≤ 4 |
+| Damage | per ball: hull 5, upper works 2, sails 1; hull 225 HP (~49 hits to sink); a hull hit knocks out ≤ 8 bricks, upper works ≤ 4; each sink credited to a ship repairs it by 30 % of full HP (68), up to full, and rebuilds the same share of its missing HP's bricks, newest first |
 | Sinking / respawn | 12 s sinking (not hittable, no control): settles and lists for 6.5 s, then the struck end floods and the far end lifts before the plunge; respawn 5 s later; a ship heeled or pitched past 75° capsizes and founders, credited to the last enemy that took its HP within 20 s |
 | FFA | first to 5 sinks or 10 min |
 | TDM | Pirates vs Navy, first to 8 sinks or 12 min; a ship respawning on a side two ships larger crosses over |
