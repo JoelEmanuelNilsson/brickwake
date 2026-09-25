@@ -57,7 +57,9 @@ each other and with what the player sees.
   `sampleOcean(x, z, t) → { height, normal, velocity }` shared by sim and client.
   The client's water mesh and the sim's buoyancy and splashes use the same function,
   so a ship sits in the water it is drawn in and a ball splashes where the drawn
-  surface is. Swell sized for the refs (heavy seas), set by feel, not capped at 1 m.
+  surface is. The match sea is a moderate swell (about 0.9 m trough to crest), a
+  quarter of the heavy seas sized for the refs; the beam- and head-sea scenarios keep
+  the heavy swell to test sea-keeping.
 - Buoyancy: a fixed set of sample points along the hull. Each submerged point pushes
   up by its depth and damps by its vertical velocity relative to the water. Heave,
   pitch and roll follow from the waves; a ship rides over swells and rolls in a beam
