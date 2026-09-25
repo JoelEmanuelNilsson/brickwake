@@ -24,7 +24,7 @@ locally, and the game is ready for Joel to play a full round and judge it.
      Run `bun install` first if `node_modules` is missing (worktrees).
   3. Prove every "Done when" line with a command or a saved screenshot in `.shots/`,
      and look at the screenshots yourself against `reference/`. Downscale before
-     viewing (`sips -Z 1024 in.png --out /tmp/x.png`) and view ≤ 12 images per
+     viewing (`sips -Z 1024 in.png --out .shots/small/<ticket>-<name>.png`, a per-ticket name so parallel workers never read each other's images) and view ≤ 12 images per
      ticket: full-size screenshots overflow the context and kill the session.
   4. Set `Status: resolved`, append `## Answer` to the ticket: what was built, file
      entry points, measured numbers, facts later tickets need, known gaps (≤ 25 lines).
