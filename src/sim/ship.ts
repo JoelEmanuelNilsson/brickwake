@@ -52,6 +52,7 @@ export type ShipLife =
   | { readonly _tag: "sunk"; readonly respawnAt: number }
 
 const afloat: ShipLife = { _tag: "afloat" }
+const intact: ReadonlyArray<number> = []
 
 /**
  * One ship's rigid body and rig. Ship-local axes: +x bow, +y up, +z starboard; the origin is on the
@@ -82,6 +83,11 @@ export interface ShipState {
   /** Enemy ships this captain has sunk, and times this ship was sunk, this match. */
   readonly kills: number
   readonly deaths: number
+  /**
+   * Galleon parts balls knocked out since this ship spawned, in hit order (indices into its generated parts). The parts
+   * that fell with them follow from the damage graph (`shipWreck`), so only this list is state and goes on the wire.
+   */
+  readonly removedParts: ReadonlyArray<number>
 }
 
 /** Heading, pitch and heel of a ship, in radians. */
@@ -122,6 +128,7 @@ export const makeShip = (
   spawn: 1,
   kills: 0,
   deaths: 0,
+  removedParts: intact,
 })
 
 /** Share of a buoyancy column at ship-local `x` still afloat at `time`: the flooding end loses it first, the far end last. */
@@ -187,7 +194,7 @@ export const sailTargetSpeed = (sailSet: number, angleOff: number, wind: Wind): 
 const approach = (value: number, target: number, maxStep: number) =>
   value + Math.max(-maxStep, Math.min(maxStep, target - value))
 
-const bodyStep = (ship: ShipState, env: ShipEnvironment, hull: Hull, time: number, h: number): ShipState => {
+const bodyStep = (ship: ShipState, env: ShipEnvironment, hull: Hull, time: number, h: number, flooded: ArrayLike<number> | undefined): ShipState => {
   const { gravity, waterDensity } = tuning.physics
   const q = ship.orientation
   const com = add(ship.position, rotate(q, hull.centerOfMass))
@@ -207,7 +214,8 @@ const bodyStep = (ship: ShipState, env: ShipEnvironment, hull: Hull, time: numbe
   let waterRise = 0
   // Flooded hull moves with the water it holds, so it loses the surface's damping along with its buoyancy.
   let keptArea = 0
-  for (const column of hull.columns) {
+  for (let c = 0; c < hull.columns.length; c++) {
+    const column = hull.columns[c]!
     const bottom = toWorld(column.bottom)
     const water = sampleOcean(env.sea, bottom.x, bottom.z, time)
     const submerged = Math.max(0, Math.min(water.height - bottom.y, column.top - column.bottom.y))
@@ -217,7 +225,8 @@ const bodyStep = (ship: ShipState, env: ShipEnvironment, hull: Hull, time: numbe
       // Damping fades in over the first half metre so a column touching the surface cannot chatter.
       const kept = buoyancyKept(ship.life, column.bottom.x, time)
       const wet = Math.min(1, submerged / 0.5) * kept
-      applyAt(center, vec3(0, column.area * (waterDensity * gravity * submerged * kept - dampingPerArea * relativeRise * wet), 0))
+      const lift = waterDensity * gravity * submerged * kept * (1 - (flooded?.[c] ?? 0))
+      applyAt(center, vec3(0, column.area * (lift - dampingPerArea * relativeRise * wet), 0))
       wetArea += column.area * wet
       waterRise += column.area * wet * water.velocity.y
     }
@@ -314,8 +323,11 @@ const bodyStep = (ship: ShipState, env: ShipEnvironment, hull: Hull, time: numbe
   }
 }
 
-/** Advances one ship by one sim tick: helm and sails move toward their commands, then the body integrates. */
-export const stepShip = (ship: ShipState, env: ShipEnvironment, hull: Hull = defaultHull): ShipState => {
+/**
+ * Advances one ship by one sim tick: helm and sails move toward their commands, then the body integrates. `flooded` is
+ * the share of each hull column's buoyancy lost to holes below the waterline, indexed like `hull.columns`.
+ */
+export const stepShip = (ship: ShipState, env: ShipEnvironment, hull: Hull = defaultHull, flooded?: ArrayLike<number>): ShipState => {
   let next: ShipState = {
     ...ship,
     rudderAngle: approach(ship.rudderAngle, ship.controls.rudder * tuning.rudder.maxAngle, tuning.rudder.rate * SIM_DT),
@@ -323,7 +335,7 @@ export const stepShip = (ship: ShipState, env: ShipEnvironment, hull: Hull = def
   }
   const substeps = tuning.physics.substeps
   const h = SIM_DT / substeps
-  for (let i = 0; i < substeps; i++) next = bodyStep(next, env, hull, env.time + i * h, h)
+  for (let i = 0; i < substeps; i++) next = bodyStep(next, env, hull, env.time + i * h, h, flooded)
   return next
 }
 

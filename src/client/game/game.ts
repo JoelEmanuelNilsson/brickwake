@@ -19,6 +19,7 @@ import { OceanSurface } from "./ocean.ts"
 import { Reticle } from "./reticle.ts"
 import { RenderPipeline } from "./render-pipeline.ts"
 import { ShipView } from "./ship-view.ts"
+import { Wrecks } from "./wrecks.ts"
 import { SinkingShips } from "./sinking.ts"
 import { createGameSky, type GameSky } from "./sky.ts"
 import { EventQueue, SnapshotTimeline } from "./timeline.ts"
@@ -80,6 +81,7 @@ export class Game {
   readonly #sky: GameSky
   readonly #wake = new WakeField()
   readonly #galleon: GalleonModel
+  readonly #wrecks: Wrecks
   /** Built ships not in play: views are built at load, so a ship joining mid-match costs no frame. */
   readonly #spareViews: Array<ShipView> = []
   readonly #connection: Connection
@@ -180,6 +182,7 @@ export class Game {
     this.scene.add(sun, sun.target, new HemisphereLight(0xffc49a, 0x0b2a30, 1.1), this.#fill)
     this.effects = new Effects(this.scene, sunDirection)
     this.#galleon = loadGalleon()
+    this.#wrecks = new Wrecks(this.#galleon.graph)
     for (let i = 0; i < tuning.match.maxShips; i++) this.#spareViews.push(new ShipView(`spare ${i}`, this.#galleon))
     // Compile every ship shader now, so the first ship in view costs no frame.
     const warm = this.#spareViews[0]
@@ -206,6 +209,7 @@ export class Game {
     this.#sinking = new SinkingShips(this.effects, this.audio)
     this.eventHandlers.push((event) => this.#gunnery.onEvent(event))
     this.eventHandlers.push((event) => this.#onMatchEvent(event))
+    this.eventHandlers.push((event) => this.#wrecks.onEvent(event))
 
     window.addEventListener("resize", () => this.#resize())
     elements.overlay.addEventListener("click", () => this.#setSail())
@@ -247,6 +251,10 @@ export class Game {
       match: () => this.#matchReading,
       matchHud: () => this.#matchHud,
       measure: (frames) => this.#measure(frames),
+      wreck: (id) => {
+        const view = this.#ships.get(id)?.view
+        return view === undefined ? undefined : { gone: this.#wrecks.of(id)?.gone ?? [], drawnParts: view.partCount }
+      },
     })
     this.#resize()
     this.renderer.setAnimationLoop((ms) => this.#renderFrame(ms))
@@ -281,6 +289,7 @@ export class Game {
         this.#timeline = new SnapshotTimeline(message.simHz)
         this.#timeline.push(message.tick, message.ships, arrival)
         this.#events = new EventQueue<ServerEvent>()
+        this.#wrecks.load(message.wrecks)
         if (this.#ocean !== undefined) this.scene.remove(this.#ocean.mesh)
         this.#ocean = new OceanSurface(message.sea, { sky: this.#sky.cube, sun: sunColor, sunDirection, flashColor }, wakePeriod)
         this.scene.add(this.#ocean.mesh)
@@ -408,6 +417,7 @@ export class Game {
         this.scene.add(entry.view.group)
       }
       entry.seen = this.#frameCount
+      entry.view.showWreck(this.#wrecks.of(id))
       const pose = entry.view.pose
       if (timeline.sample(id, pose)) {
         entry.view.update(pose, windX, windZ, dt, camera.camera, viewportHeight)

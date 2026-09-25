@@ -11,6 +11,7 @@ import {
 } from "./gunnery.ts"
 import { stepMatch, type BroadsideOrder, type MatchEvent, type MatchState } from "./match.ts"
 import { dummyShipId, scenarios, scenarioShipId } from "./scenarios.ts"
+import { hitDamage } from "./ship/damage.ts"
 import { shipAttitude, shipId, type ShipState } from "./ship.ts"
 import { SIM_DT, SIM_HZ, tuning } from "./tuning.ts"
 import { add, length, quatFromAxisAngle, scale, sub, vec3, type Vec3 } from "./vector.ts"
@@ -140,10 +141,16 @@ test("a broadside at the drifting dummy hits it and each hit takes HP", () => {
   for (const hit of hits) {
     expect(hit.target).toBe(dummyShipId)
     expect(hit.shooter).toBe(scenarioShipId)
-    expect(Math.abs(hit.localPoint.z)).toBeCloseTo(tuning.hull.hitBox.beam / 2, 3)
+    expect(Math.abs(hit.localPoint.z)).toBeLessThan(4.8)
+    expect(hit.removed.length).toBeGreaterThan(0)
   }
-  expect(hits.at(-1)!.hp).toBe(tuning.damage.hullHp - hits.length * tuning.damage.perBall)
-  expect(state.ships.find((ship) => ship.id === dummyShipId)!.hp).toBe(hits.at(-1)!.hp)
+  // Most strike the facing port side's planking; a ball through a gunport or a fresh hole may strike the far side inside.
+  expect(hits.filter((hit) => hit.localPoint.z < -2).length).toBeGreaterThan(hits.length / 2)
+  const taken = hits.reduce((sum, hit) => sum + hitDamage(hit.zone), 0)
+  expect(hits.at(-1)!.hp).toBe(tuning.damage.hullHp - taken)
+  const dummy1 = state.ships.find((ship) => ship.id === dummyShipId)!
+  expect(dummy1.hp).toBe(hits.at(-1)!.hp)
+  expect(dummy1.removedParts).toEqual(hits.flatMap((hit) => hit.removed))
   expect(state.balls).toHaveLength(0)
 })
 

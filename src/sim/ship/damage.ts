@@ -87,6 +87,13 @@ export class ShipDamage {
     return this.#present[i] === 1
   }
 
+  /** An independent copy with the same parts present. */
+  clone(): ShipDamage {
+    const copy = new ShipDamage(this.graph)
+    copy.#present.set(this.#present)
+    return copy
+  }
+
   /**
    * A ball strikes ship-local `point` travelling along ship-local `direction`: knock out the parts nearest its
    * path, up to the cap of the zone it struck, and drop whatever that cuts off from the keel.

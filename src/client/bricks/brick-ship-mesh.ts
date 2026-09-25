@@ -233,6 +233,28 @@ class Layer {
     return true
   }
 
+  /** Empty every pool, for refilling; call `uploadAll` after. */
+  clear(): void {
+    for (const pool of this.pools.values()) {
+      pool.mesh.count = 0
+      pool.mesh.visible = false
+    }
+    this.slots.fill(-1)
+    this.poolOf.fill(undefined)
+  }
+
+  /** Send every pool's instances to the GPU whole. */
+  uploadAll(): void {
+    for (const { mesh } of this.pools.values()) {
+      mesh.instanceMatrix.clearUpdateRanges()
+      mesh.instanceMatrix.needsUpdate = true
+      if (mesh.instanceColor !== null) {
+        mesh.instanceColor.clearUpdateRanges()
+        mesh.instanceColor.needsUpdate = true
+      }
+    }
+  }
+
   /** Bound every pool by the whole ship, so instances revealed later are never culled. */
   finish(bounds: Box3): void {
     for (const pool of this.pools.values()) pool.mesh.boundingSphere = bounds.getBoundingSphere(new Sphere())
@@ -272,6 +294,7 @@ export class BrickShipMesh {
   private readonly midStuds: Layer
   private readonly plugs: Layer
   private readonly plugOwners: ReadonlyArray<number>
+  private readonly plugMatrices: ReadonlyArray<Matrix4>
   private readonly studStart: Int32Array
   private readonly placements: ReadonlyArray<BrickPlacement>
   private readonly flats: ReadonlyArray<{ readonly key: string; readonly scale: readonly [number, number, number] }>
@@ -319,17 +342,11 @@ export class BrickShipMesh {
     this.plugs.pool("plug", library.flat("3005").geometry, library.plastic, plugs.length)
 
     const bounds = new Box3()
-    this.presence = new Uint8Array(placements.length).fill(1)
-    placements.forEach((placement, i) => {
-      bounds.expandByPoint(scratchPosition.setFromMatrixPosition(placement.matrix))
-      if (placement.hidden === true) return
-      this.showPart(i, placement.interior === true, false)
-      const hidden = placement.hiddenStuds ?? []
-      const count = partCatalog[placement.part].studs.length
-      for (let s = 0; s < count; s++) if (!hidden.includes(s)) this.showStud(i, s, false)
-    })
-    plugs.forEach((plug, i) => this.plugs.add(i, "plug", plug.matrix, plugColor, false))
-    this.present = placements.length
+    for (const placement of placements) bounds.expandByPoint(scratchPosition.setFromMatrixPosition(placement.matrix))
+    this.plugMatrices = plugs.map((plug) => plug.matrix)
+    this.presence = new Uint8Array(placements.length)
+    this.present = 0
+    this.fill()
     // Part origins sit on a corner or face; a metre covers the rest of the largest part.
     bounds.expandByScalar(1)
     for (const layer of this.layers()) {
@@ -428,6 +445,13 @@ export class BrickShipMesh {
     return { parts, studs, ...into }
   }
 
+  /** Put every part back as built, hidden ones still hidden: a pooled ship made whole for reuse. Never reallocates. */
+  restore(): void {
+    for (const layer of this.layers()) layer.clear()
+    this.fill()
+    for (const layer of this.layers()) layer.uploadAll()
+  }
+
   /** Free the per-ship instance buffers; the library's shared geometry and materials stay. */
   dispose(): void {
     for (const layer of this.layers()) layer.dispose()
@@ -436,6 +460,19 @@ export class BrickShipMesh {
 
   private layers(): ReadonlyArray<Layer> {
     return [this.near, this.nearStuds, this.flatOuter, this.flatInner, this.midStuds, this.plugs]
+  }
+
+  private fill() {
+    this.placements.forEach((placement, i) => {
+      if (placement.hidden === true) return
+      this.showPart(i, placement.interior === true, false)
+      const hidden = placement.hiddenStuds ?? []
+      const count = partCatalog[placement.part].studs.length
+      for (let s = 0; s < count; s++) if (!hidden.includes(s)) this.showStud(i, s, false)
+    })
+    this.plugMatrices.forEach((matrix, i) => this.plugs.add(i, "plug", matrix, plugColor, false))
+    this.presence.fill(1)
+    this.present = this.placements.length
   }
 
   private showPart(index: number, interior: boolean, upload: boolean) {

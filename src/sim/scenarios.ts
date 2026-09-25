@@ -65,5 +65,6 @@ export const scenarios = {
 /** A scenario name. */
 export type ScenarioName = keyof typeof scenarios
 
-/** The ships joining clients take in a scenario, in order; the rest stay unmanned. */
-export const scenarioSeats = (name: ScenarioName): ReadonlyArray<ShipId> => (name === "duel" ? duelShipIds : [scenarioShipId])
+/** The ships joining clients take in a scenario, in order; the rest stay unmanned. A second client in a named `target-dummy` room crews the dummy. */
+export const scenarioSeats = (name: ScenarioName): ReadonlyArray<ShipId> =>
+  name === "duel" ? duelShipIds : name === "target-dummy" ? [scenarioShipId, dummyShipId] : [scenarioShipId]

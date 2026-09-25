@@ -108,6 +108,14 @@ export interface BrickwakeDebug {
   orbit(yaw: number, pitch: number, distance?: number): void
   /** Test control: renders `frames` frames of the live game back to back and times them. */
   measure(frames: number): FrameMeasure
+  /** A drawn ship's damage: parts gone, sorted, and parts left on its meshes; null when the ship is not drawn. */
+  wreck(id: string): DebugWreck | null
+}
+
+/** One ship's damage as the client draws it. */
+export interface DebugWreck {
+  readonly gone: ReadonlyArray<number>
+  readonly drawnParts: number
 }
 
 declare global {
@@ -135,6 +143,7 @@ export interface DebugSource {
   readonly match: () => MatchReading
   readonly matchHud: () => MatchHud
   readonly measure: (frames: number) => FrameMeasure
+  readonly wreck: (id: string) => { readonly gone: ReadonlyArray<number>; readonly drawnParts: number } | undefined
 }
 
 const describeShip = (id: string, pose: ShipPose, sea: SeaState | undefined, time: number): DebugShip => {
@@ -219,6 +228,10 @@ export const installDebugHook = (source: DebugSource): void => {
     fire: () => source.gunnery().fire(),
     fireAt: ([x, y, z]) => source.gunnery().fire({ x, y, z }),
     measure: (frames) => source.measure(frames),
+    wreck: (id) => {
+      const wreck = source.wreck(id)
+      return wreck === undefined ? null : { gone: [...wreck.gone].sort((a, b) => a - b), drawnParts: wreck.drawnParts }
+    },
     orbit: (yaw, pitch, distance) => {
       const chase = source.camera()
       if (chase === undefined) return

@@ -1,9 +1,12 @@
 import { Group, MathUtils, MeshDepthMaterial, MeshStandardMaterial, type PerspectiveCamera, RGBADepthPacking, Vector3, Vector4, type WebGLProgramParametersWithUniforms, type WebGLRenderer } from "three"
 import { type BrickDetail, brickDetailFor, BrickShipMesh } from "../bricks/brick-ship-mesh.ts"
+import { type DrawnPart, removeAndReveal } from "../bricks/ship-wreck.ts"
 import { pirateLivery } from "../rig/sail-livery.ts"
 import { ShipRig } from "../rig/ship-rig.ts"
+import type { ShipAir } from "../../sim/ship/air.ts"
 import type { GalleonModel } from "./galleon.ts"
 import { ShipPose } from "./timeline.ts"
+import type { Wreck } from "./wrecks.ts"
 
 /** Yards brace this share of the apparent wind's angle off the stern, up to `maxBrace` (sharp up), swinging at `braceRate`. */
 const braceGain = 0.5
@@ -74,6 +77,10 @@ export class ShipView {
   readonly #sinceFired: Float64Array
   #brace = 0
   #detail: BrickDetail | undefined
+  #air: ShipAir
+  /** The wreck drawn and how many of its gone parts are off the meshes. */
+  #wreck: Wreck | undefined
+  #wreckDrawn = 0
 
   constructor(name: string, model: GalleonModel) {
     this.#model = model
@@ -107,6 +114,12 @@ export class ShipView {
     this.rig = new ShipRig(model.rig, pirateLivery)
     this.group.add(this.#hull.root, this.#moving.root, this.#rudder, this.rig.root)
     this.#sinceFired = new Float64Array(model.guns.length).fill(Number.POSITIVE_INFINITY)
+    this.#air = model.air.clone()
+  }
+
+  /** Parts still on the drawn ship (drawn or hidden inside), hull and moving parts together. */
+  get partCount(): number {
+    return this.#hull.partCount + this.#moving.partCount
   }
 
   get detail(): BrickDetail {
@@ -125,11 +138,29 @@ export class ShipView {
     return out.copy(drawn.muzzle).applyQuaternion(this.group.quaternion).add(this.group.position)
   }
 
-  /** Take ship part `part` (an index into the generated ship's parts) off the drawn ship; false if it was not drawn. */
-  removePart(part: number): boolean {
+  /**
+   * Draw the ship holed as `wreck` says (undefined: whole). Takes off only parts gone since the last call; a different
+   * wreck (a new life, a repair, a pooled view reused) first restores the whole ship.
+   */
+  showWreck(wreck: Wreck | undefined): void {
+    if (wreck !== this.#wreck) {
+      if (this.#wreckDrawn > 0) {
+        this.#hull.restore()
+        this.#moving.restore()
+        this.#air = this.#model.air.clone()
+        this.#wreckDrawn = 0
+      }
+      this.#wreck = wreck
+    }
+    if (wreck === undefined || wreck.gone.length === this.#wreckDrawn) return
+    const gone = wreck.gone.slice(this.#wreckDrawn)
+    this.#wreckDrawn = wreck.gone.length
+    removeAndReveal(this.#locate, this.#air, gone)
+  }
+
+  readonly #locate = (part: number): DrawnPart | undefined => {
     const slot = this.#model.slots[part]
-    if (slot === undefined) return false
-    return (slot.mesh === "hull" ? this.#hull : this.#moving).remove(slot.index)
+    return slot === undefined ? undefined : { mesh: slot.mesh === "hull" ? this.#hull : this.#moving, index: slot.index }
   }
 
   /**

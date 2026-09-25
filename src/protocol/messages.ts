@@ -98,6 +98,12 @@ export const ShipSnapshot = Schema.Struct({
 /** Wire form of one ship. */
 export interface ShipSnapshot extends Schema.Schema.Type<typeof ShipSnapshot> {}
 
+/** Where a ball struck, as in `DamageZone`. */
+export const DamageZoneSchema = Schema.Literals(["hull", "upperWorks", "sails"])
+
+/** One ship's knocked-out parts, as in `ShipState.removedParts`. */
+export const ShipWreck = Schema.Struct({ shipId: ShipIdSchema, removed: Schema.Array(Schema.Int) })
+
 /** Something that happened at `tick`; clients apply it when their render clock reaches that tick. */
 export const ServerEvent = Schema.TaggedUnion({
   shipJoined: { tick: Schema.Int, shipId: ShipIdSchema },
@@ -114,8 +120,25 @@ export const ServerEvent = Schema.TaggedUnion({
   },
   /** A broadside order the sim would not carry out, with why. */
   broadsideRefused: { tick: Schema.Int, shipId: ShipIdSchema, side: BroadsideSideSchema, reason: BroadsideRefusalSchema },
-  /** A ball struck a hull at sim time `time`; `localPoint` is target-local. */
+  /**
+   * A ball struck a ship's parts at sim time `time`; `localPoint` is target-local. `removed` are the parts it knocked
+   * out in order: apply them to the target's `ShipDamage` in arrival order to get the same parts falling off.
+   */
   ballHit: {
+    tick: Schema.Int,
+    time: Schema.Finite,
+    ballId: Schema.Int,
+    shooter: ShipIdSchema,
+    target: ShipIdSchema,
+    point: Vec3Tuple,
+    localPoint: Vec3Tuple,
+    zone: DamageZoneSchema,
+    removed: Schema.Array(Schema.Int),
+    damage: Schema.Finite,
+    hp: Schema.Finite,
+  },
+  /** A ball tore through one of the target's sails at sim time `time` and flew on. */
+  sailHit: {
     tick: Schema.Int,
     time: Schema.Finite,
     ballId: Schema.Int,
@@ -132,6 +155,8 @@ export const ServerEvent = Schema.TaggedUnion({
   shipSunk: { tick: Schema.Int, time: Schema.Finite, shipId: ShipIdSchema, by: Schema.NullOr(ShipIdSchema) },
   /** A ship re-entered on the spawn ring, after sinking or at a restart. */
   shipRespawned: { tick: Schema.Int, shipId: ShipIdSchema },
+  /** A ship afloat was made whole in place: full HP, every part back. */
+  shipRepaired: { tick: Schema.Int, shipId: ShipIdSchema },
 })
 
 /** A server event. */
@@ -168,6 +193,8 @@ export const ServerMessage = Schema.TaggedUnion({
     phase: MatchPhaseSchema,
     wind: WindSnapshot,
     ships: Schema.Array(ShipSnapshot),
+    /** Every damaged ship's `removedParts`, in hit order; later hits arrive as `ballHit.removed`. */
+    wrecks: Schema.Array(ShipWreck),
   },
   /** The full world after a tick, with the events that tick produced. Sent every tick. */
   snapshot: {
@@ -216,6 +243,10 @@ export const shipSnapshot = (ship: ShipState): ShipSnapshot => ({
   deaths: ship.deaths,
 })
 
+/** The damaged ships' removed parts, for the welcome. */
+export const wreckSnapshots = (state: MatchState): ReadonlyArray<typeof ShipWreck.Type> =>
+  state.ships.flatMap((ship) => (ship.removedParts.length === 0 ? [] : [{ shipId: ship.id, removed: ship.removedParts }]))
+
 /** The match phase on the wire. */
 export const phaseSnapshot = (phase: MatchPhase): MatchPhaseSnapshot =>
   phase._tag === "ended" ? { ...phase, winner: phase.winner ?? null } : phase
@@ -248,11 +279,14 @@ export const serverEvent = (event: MatchEvent): ServerEvent => {
       return event
     case "ballHit":
       return { ...event, time: round(event.time, 6), point: tuple(event.point, 3), localPoint: tuple(event.localPoint, 3) }
+    case "sailHit":
+      return { ...event, time: round(event.time, 6), point: tuple(event.point, 3), localPoint: tuple(event.localPoint, 3) }
     case "ballSplash":
       return { ...event, time: round(event.time, 6), point: tuple(event.point, 3) }
     case "shipSunk":
       return { ...event, time: round(event.time, 6), by: event.by ?? null }
     case "shipRespawned":
+    case "shipRepaired":
       return event
   }
 }

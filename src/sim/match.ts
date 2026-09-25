@@ -1,14 +1,17 @@
 import { decideBotControls, drawBotSkill, type Bot } from "./bots.ts"
 import { collideShips } from "./collision.ts"
+import { defaultHull } from "./hull.ts"
 import { gunLayout, type BroadsideSide } from "./gun-layout.ts"
 import { ballId, broadsideRefusal, fireGun, traceBall, type BallId, type BroadsideRefusal, type Cannonball } from "./gunnery.ts"
 import type { SeaState } from "./ocean.ts"
 import { seedRng, type RngState } from "./rng.ts"
 import { ffaRules, openingPhase, scoreLimitReached, scoreSink, winnerOf, type MatchPhase, type MatchRules } from "./rules.ts"
 import { makeShip, shipId, stepShip, type ShipControls, type ShipId, type ShipState } from "./ship.ts"
+import { hitDamage, type DamageZone } from "./ship/damage.ts"
 import { SIM_DT, tuning } from "./tuning.ts"
 import type { Vec3 } from "./vector.ts"
 import { stepWind, type Wind } from "./wind.ts"
+import { shipFlooding, strikeWreck } from "./wreck.ts"
 
 /** Everything that decides a match's outcome. Replays exactly from its seed and the inputs per tick. */
 export interface MatchState {
@@ -72,7 +75,23 @@ export type MatchEvent =
       /** Where the ball struck, world and target-local. */
       readonly point: Vec3
       readonly localPoint: Vec3
+      /** What it struck, and the parts it knocked out in order (appended to the target's `removedParts`). */
+      readonly zone: DamageZone
+      readonly removed: ReadonlyArray<number>
       /** HP the hit took and the target's HP after it. */
+      readonly damage: number
+      readonly hp: number
+    }
+  /** A ball tore through one of the target's set sails and flew on. */
+  | {
+      readonly _tag: "sailHit"
+      readonly tick: number
+      readonly time: number
+      readonly ballId: BallId
+      readonly shooter: ShipId
+      readonly target: ShipId
+      readonly point: Vec3
+      readonly localPoint: Vec3
       readonly damage: number
       readonly hp: number
     }
@@ -81,6 +100,8 @@ export type MatchEvent =
   | { readonly _tag: "shipSunk"; readonly tick: number; readonly time: number; readonly shipId: ShipId; readonly by: ShipId | undefined }
   /** A ship re-entered the match on the spawn ring: after sinking, or at a restart. */
   | { readonly _tag: "shipRespawned"; readonly tick: number; readonly shipId: ShipId }
+  /** A ship afloat was made whole in place (full HP, no parts missing) as play began. */
+  | { readonly _tag: "shipRepaired"; readonly tick: number; readonly shipId: ShipId }
 
 /** Controls received this tick, by ship. Ships without an entry keep their last controls. */
 export type ShipInputs = ReadonlyMap<ShipId, ShipControls>
@@ -249,14 +270,40 @@ export const stepMatch = (
   const env = { sea: state.sea, wind: state.wind, time: start }
   // Sunk hulls keep falling through the water until they respawn, so a ship never stops mid-plunge on screen.
   let moved = collideShips(
-    ships.map((ship) => stepShip(ship, env)),
+    // Holes flood an afloat hull; a foundering one follows the sinking flood alone, so it goes under on time.
+    ships.map((ship) => stepShip(ship, env, defaultHull, isAfloat(ship) ? shipFlooding(ship.removedParts) : undefined)),
     isAbove,
   )
-  // A foundering hull still stops balls (they strike it for no damage); a sunk one is under the sea.
-  const pairs = ships.flatMap((ship, index) => (isAbove(ship) ? [[ship, moved[index]!] as const] : []))
+  // A foundering hull still stops balls (they break bricks for no HP); a sunk one is under the sea.
   const flying: Array<Cannonball> = []
+  const takeHp = (index: number, zone: DamageZone, ball: Cannonball, time: number, localPoint: Vec3) => {
+    const target = moved[index]!
+    if (!isAfloat(target)) return { damage: 0, hp: target.hp, sunk: undefined }
+    const hp = Math.max(0, target.hp - hitDamage(zone))
+    if (hp > 0) {
+      moved = moved.with(index, { ...target, hp })
+      return { damage: target.hp - hp, hp, sunk: undefined }
+    }
+    // The end the killing ball struck floods first, so the ship goes down by the bow or the stern.
+    const floodEnd = localPoint.x >= 0 ? 1 : -1
+    moved = moved.with(index, { ...target, hp, life: { _tag: "sinking", since: time, floodEnd }, controls: { rudder: 0, sail: 0 } })
+    pending = pending.filter((shot) => shot.shipId !== target.id)
+    const by = moved.some((ship) => ship.id === ball.shooter) ? ball.shooter : undefined
+    if (state.phase._tag === "playing") moved = scoreSink(state.rules, moved, target.id, by)
+    const sunk: MatchEvent = { _tag: "shipSunk", tick: state.tick, time, shipId: target.id, by }
+    return { damage: target.hp, hp, sunk }
+  }
   for (const ball of balls) {
-    const outcome = traceBall({ ball, sea: state.sea, from: Math.max(start, ball.firedAt), to: end, ships: pairs, tickStart: start })
+    // Pairs are rebuilt per ball: an earlier ball this tick may have holed a hull this one flies through.
+    const pairs = ships.flatMap((ship, index) => (isAbove(ship) ? [[ship, moved[index]!] as const] : []))
+    const trace = traceBall({ ball, sea: state.sea, from: Math.max(start, ball.firedAt), to: end, ships: pairs, tickStart: start })
+    for (const sail of trace.sails) {
+      const index = moved.findIndex((ship) => ship.id === sail.target)
+      const { damage, hp, sunk } = takeHp(index, "sails", ball, sail.time, sail.localPoint)
+      events.push({ _tag: "sailHit", tick: state.tick, time: sail.time, ballId: ball.id, shooter: ball.shooter, target: sail.target, point: sail.point, localPoint: sail.localPoint, damage, hp })
+      if (sunk) events.push(sunk)
+    }
+    const outcome = trace.end
     if (!outcome) {
       if (end - ball.firedAt < tuning.guns.maxFlightSeconds) flying.push(ball)
       continue
@@ -266,8 +313,9 @@ export const stepMatch = (
       continue
     }
     const index = moved.findIndex((ship) => ship.id === outcome.target)
-    const target = moved[index]!
-    const hp = isAfloat(target) ? Math.max(0, target.hp - tuning.damage.perBall) : target.hp
+    const struck = strikeWreck(moved[index]!.removedParts, outcome.localPoint, outcome.direction)
+    moved = moved.with(index, { ...moved[index]!, removedParts: struck.removedParts })
+    const { damage, hp, sunk } = takeHp(index, struck.hit.zone, ball, outcome.time, outcome.localPoint)
     events.push({
       _tag: "ballHit",
       tick: state.tick,
@@ -277,20 +325,12 @@ export const stepMatch = (
       target: outcome.target,
       point: outcome.point,
       localPoint: outcome.localPoint,
-      damage: target.hp - hp,
+      zone: struck.hit.zone,
+      removed: struck.hit.removed,
+      damage,
       hp,
     })
-    if (hp > 0 || !isAfloat(target)) {
-      moved = moved.with(index, { ...target, hp })
-      continue
-    }
-    // The end the killing ball struck floods first, so the ship goes down by the bow or the stern.
-    const floodEnd = outcome.localPoint.x >= 0 ? 1 : -1
-    moved = moved.with(index, { ...target, hp, life: { _tag: "sinking", since: outcome.time, floodEnd }, controls: { rudder: 0, sail: 0 } })
-    pending = pending.filter((shot) => shot.shipId !== target.id)
-    const by = moved.some((ship) => ship.id === ball.shooter) ? ball.shooter : undefined
-    events.push({ _tag: "shipSunk", tick: state.tick, time: outcome.time, shipId: target.id, by })
-    if (state.phase._tag === "playing") moved = scoreSink(state.rules, moved, target.id, by)
+    if (sunk) events.push(sunk)
   }
 
   const { seconds: sinkSeconds, respawnSeconds } = tuning.sinking
@@ -312,7 +352,11 @@ export const stepMatch = (
     case "warmup":
       if (end < phase.endsAt) break
       phase = { _tag: "playing", endsAt: end + state.rules.timeLimit }
-      moved = moved.map((ship) => ({ ...ship, kills: 0, deaths: 0, hp: isAfloat(ship) ? tuning.damage.hullHp : ship.hp }))
+      moved = moved.map((ship) => {
+        if (!isAfloat(ship) || (ship.hp === tuning.damage.hullHp && ship.removedParts.length === 0)) return { ...ship, kills: 0, deaths: 0 }
+        events.push({ _tag: "shipRepaired", tick: state.tick, shipId: ship.id })
+        return { ...ship, kills: 0, deaths: 0, hp: tuning.damage.hullHp, removedParts: [] }
+      })
       break
     case "playing":
       if (end < phase.endsAt && !scoreLimitReached(state.rules, moved)) break

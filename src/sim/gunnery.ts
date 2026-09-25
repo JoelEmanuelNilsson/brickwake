@@ -3,6 +3,7 @@ import { sampleOcean, type SeaState } from "./ocean.ts"
 import { nextRange, type RngState } from "./rng.ts"
 import { applyImpulse, shipPointToWorld, shipPointVelocity, type ShipId, type ShipState } from "./ship.ts"
 import { tuning } from "./tuning.ts"
+import { galleonClass, shipWreck } from "./wreck.ts"
 import { add, integrateQuat, length, rotate, rotateInverse, scale, sub, vec3, type Vec3 } from "./vector.ts"
 
 declare const ballIdBrand: unique symbol
@@ -239,10 +240,6 @@ export const fireGun = (options: {
   return { ball, ship, rng }
 }
 
-const { length: hullLength, beam, bottom, top } = tuning.hull.hitBox
-const hullMin = vec3(-hullLength / 2, bottom, -beam / 2)
-const hullMax = vec3(hullLength / 2, top, beam / 2)
-
 /** Fraction 0…1 along segment a→b where it first enters the box [min, max], or undefined when it misses. */
 export const segmentBoxEntry = (a: Vec3, b: Vec3, min: Vec3, max: Vec3): number | undefined => {
   let enter = 0
@@ -262,10 +259,31 @@ export const segmentBoxEntry = (a: Vec3, b: Vec3, min: Vec3, max: Vec3): number 
   return enter
 }
 
-/** How a ball's flight ended. */
+/** How a ball's flight ended. `direction` is the ball's ship-local unit direction into the target. */
 export type BallOutcome =
-  | { readonly _tag: "hit"; readonly time: number; readonly target: ShipId; readonly point: Vec3; readonly localPoint: Vec3 }
+  | {
+      readonly _tag: "hit"
+      readonly time: number
+      readonly target: ShipId
+      readonly point: Vec3
+      readonly localPoint: Vec3
+      readonly direction: Vec3
+    }
   | { readonly _tag: "splash"; readonly time: number; readonly point: Vec3 }
+
+/** A ball passing through one of `target`'s set sails at `time`; it flies on. */
+export interface SailStrike {
+  readonly time: number
+  readonly target: ShipId
+  readonly point: Vec3
+  readonly localPoint: Vec3
+}
+
+/** Where one tick of a ball's flight went: sails it passed through, in time order, and how it ended, if it did. */
+export interface BallTrace {
+  readonly sails: ReadonlyArray<SailStrike>
+  readonly end: BallOutcome | undefined
+}
 
 const toLocal = (ship: ShipState, world: Vec3) => rotateInverse(ship.orientation, sub(world, ship.position))
 
@@ -274,45 +292,73 @@ const splashBisections = 24
 /**
  * Follows a ball from `from` to `to` sim seconds. Each other ship is swept in its own frame, from its pose at the
  * start (extrapolated if the ball was fired mid-tick) to its pose at the end, so fast balls and moving hulls cannot
- * tunnel. The earlier of a hull hit and the wave-surface crossing ends the flight.
+ * tunnel. A box around the ship's parts and sails is the broad phase; the parts still on the ship (`removedParts`)
+ * decide the hit, so a ball flies on through a hole or over a shot-away rail. Set sails it crosses are struck and
+ * passed through. The earlier of a part hit and the wave-surface crossing ends the flight.
  */
 export const traceBall = (options: {
   readonly ball: Cannonball
   readonly sea: SeaState
   readonly from: number
   readonly to: number
-  /** Every ship at the tick start and at its end, same order. */
+  /** Every ship at the tick start and at its end, same order; the end state carries its current damage. */
   readonly ships: ReadonlyArray<readonly [start: ShipState, end: ShipState]>
   readonly tickStart: number
-}): BallOutcome | undefined => {
+}): BallTrace => {
   const { ball, sea, from, to } = options
   const a = ballPositionAt(ball, from)
   const b = ballPositionAt(ball, to)
+  const hull = galleonClass()
   let hit: Extract<BallOutcome, { _tag: "hit" }> | undefined
+  const sails: Array<SailStrike> = []
   for (const [start, end] of options.ships) {
     if (start.id === ball.shooter) continue
     const localA = toLocal(extrapolateShip(start, from - options.tickStart), a)
     const localB = toLocal(end, b)
-    const entry = segmentBoxEntry(localA, localB, hullMin, hullMax)
-    if (entry === undefined) continue
-    const time = from + entry * (to - from)
-    if (hit && hit.time <= time) continue
-    hit = { _tag: "hit", time, target: start.id, point: ballPositionAt(ball, time), localPoint: add(localA, scale(sub(localB, localA), entry)) }
+    if (segmentBoxEntry(localA, localB, hull.min, hull.max) === undefined) continue
+    const chord = sub(localB, localA)
+    const span = length(chord)
+    if (span === 0) continue
+    const direction = scale(chord, 1 / span)
+    const wreck = shipWreck(end.removedParts)
+    const along = wreck.firstPartAlong(localA, direction, span)
+    if (along !== undefined) {
+      const time = from + (along / span) * (to - from)
+      if (!hit || time < hit.time)
+        hit = { _tag: "hit", time, target: start.id, point: ballPositionAt(ball, time), localPoint: add(localA, scale(direction, along)), direction }
+    }
+    if (end.sailSet <= 0) continue
+    for (const sail of hull.sails) {
+      const before = localA.x - sail.x
+      const after = localB.x - sail.x
+      if (before < 0 === after < 0 || (sail.yardPart >= 0 && !wreck.isPresent(sail.yardPart))) continue
+      const f = before / (before - after)
+      const at = add(localA, scale(chord, f))
+      const foot = sail.top - (sail.top - sail.foot) * Math.min(1, end.sailSet)
+      if (at.y < foot || at.y > sail.top) continue
+      const half = sail.footHalf + ((sail.topHalf - sail.footHalf) * (at.y - sail.foot)) / (sail.top - sail.foot)
+      if (Math.abs(at.z) > half) continue
+      const time = from + f * (to - from)
+      sails.push({ time, target: start.id, point: ballPositionAt(ball, time), localPoint: at })
+    }
   }
   const above = (t: number) => {
     const p = ballPositionAt(ball, t)
     return p.y - sampleOcean(sea, p.x, p.z, t).height
   }
-  if (above(to) >= 0) return hit
-  let low = from
-  let high = to
-  if (above(from) < 0) high = from
-  else
-    for (let i = 0; i < splashBisections; i++) {
-      const mid = (low + high) / 2
-      if (above(mid) >= 0) low = mid
-      else high = mid
-    }
-  if (hit && hit.time <= high) return hit
-  return { _tag: "splash", time: high, point: ballPositionAt(ball, high) }
+  let ended: BallOutcome | undefined = hit
+  if (above(to) < 0) {
+    let low = from
+    let high = to
+    if (above(from) < 0) high = from
+    else
+      for (let i = 0; i < splashBisections; i++) {
+        const mid = (low + high) / 2
+        if (above(mid) >= 0) low = mid
+        else high = mid
+      }
+    if (!hit || hit.time > high) ended = { _tag: "splash", time: high, point: ballPositionAt(ball, high) }
+  }
+  const endTime = ended?.time ?? Infinity
+  return { sails: sails.filter((sail) => sail.time < endTime).sort((p, q) => p.time - q.time), end: ended }
 }

@@ -230,6 +230,60 @@ const joinDuel = async (browser: Browser, url: string, room: string) => {
   return page
 }
 
+/** Plays C6's damage half: A holes the dummy, a late joiner crews the dummy and draws both ships with the same parts gone, before and after a new hit. */
+const wreck = async (browser: Browser, url: string) => {
+  const room = `c6-${Date.now()}`
+  const join = async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } })
+    await page.goto(`${url}?scenario=target-dummy&room=${room}`)
+    await page.waitForFunction(() => window.brickwake?.joined === true && window.brickwake.ships().length === 2, undefined, { timeout: 15_000 })
+    await page.mouse.click(640, 360)
+    return page
+  }
+  const volley = async (page: Page) => {
+    await page.waitForFunction(() => window.brickwake?.aim()?.reloadLeft === 0, undefined, { timeout: 8000 })
+    const dummy = await shipById(page, "dummy")
+    const outcome = await page.evaluate((p) => window.brickwake?.fireAt(p), [dummy.position[0], 0, dummy.position[2]] as const)
+    check(outcome === "fired", `A fires at the dummy (${outcome})`)
+    await page.waitForTimeout(3500)
+  }
+  const ids = ["player", "dummy"] as const
+  const wrecksOf = (page: Page) => page.evaluate((ids) => ids.map((id) => window.brickwake?.wreck(id) ?? null), [...ids])
+
+  const a = await join()
+  check((await hook(a, (h) => h.shipId)) === "player", "A crews the player ship")
+  const own = await ownShip(a)
+  await volley(a)
+  const holed = await wrecksOf(a)
+  const dummyHp = (await shipById(a, "dummy")).hp
+  check((holed[1]?.gone.length ?? 0) > 20, `A draws the dummy holed (${holed[1]?.gone.length} parts gone, HP ${dummyHp})`)
+
+  const late = await join()
+  check((await hook(late, (h) => h.shipId)) === "dummy", "the late joiner crews the dummy")
+  await late.waitForTimeout(800)
+  const joined = await wrecksOf(late)
+  check(JSON.stringify(joined) === JSON.stringify(await wrecksOf(a)), `the late joiner draws the same parts gone on both ships (${joined.map((w) => w?.gone.length).join(", ")})`)
+  const lateView = await ownShip(late)
+  await late.evaluate((yaw) => window.brickwake?.orbit(yaw, 0.22, 26), bearing(own.position, lateView.position) + 0.35)
+  await late.waitForTimeout(1200)
+  await late.screenshot({ path: ".shots/c6-late-joiner.png" })
+
+  await volley(a)
+  const [afterA, afterLate] = [await wrecksOf(a), await wrecksOf(late)]
+  check((afterA[1]?.gone.length ?? 0) > (holed[1]?.gone.length ?? 0), `A's next volley breaks more (${afterA[1]?.gone.length} parts gone)`)
+  check(JSON.stringify(afterA) === JSON.stringify(afterLate), "both clients still agree after a hit the late joiner saw live")
+  // Let the splashes and smoke of the hit clear so the holes show.
+  await late.waitForTimeout(3000)
+  await late.screenshot({ path: ".shots/c6-late-joiner-after.png" })
+  const drawn = afterA.map((w) => w?.drawnParts)
+  await Promise.all([a.close(), late.close()])
+  return [
+    `dummy: ${holed[1]?.gone.length} parts gone after 1 volley (HP ${dummyHp}), ${afterA[1]?.gone.length} after 2; parts left on the meshes ${drawn.join(", ")}`,
+    "late joiner agrees on both ships at join and after a live hit",
+    "saved .shots/c6-{late-joiner,late-joiner-after}.png",
+  ].join("\n")
+}
+
 const matchOf = async (page: Page) => {
   const match = await hook(page, (h) => h.match())
   if (match === null) throw new Error("the client shows no match")
@@ -507,7 +561,7 @@ Effect.gen(function* () {
     Effect.promise(() => chromium.launch({ args: ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist"] })),
     (browser) => Effect.promise(() => browser.close()),
   )
-  const checks = { c1: sail, c2: gunnery, c3: match, c4: bots, c5: scene }
+  const checks = { c1: sail, c2: gunnery, c3: match, c4: bots, c5: scene, c6: wreck }
   const wanted = process.argv.slice(2)
   for (const [name, run] of Object.entries(checks)) {
     if (wanted.length > 0 && !wanted.includes(name)) continue

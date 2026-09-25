@@ -5,6 +5,7 @@ import {
   ServerMessageJson,
   shipSnapshot,
   windSnapshot,
+  wreckSnapshots,
   type ClientMessage,
   type ServerEvent,
   type ServerMessage,
@@ -15,6 +16,7 @@ import { scenarios, scenarioSeats, type ScenarioName } from "../sim/scenarios.ts
 import { shipId, type ShipControls, type ShipId } from "../sim/ship.ts"
 import { SIM_DT, SIM_HZ, tuning } from "../sim/tuning.ts"
 import { makeWind } from "../sim/wind.ts"
+import { galleonClass } from "../sim/wreck.ts"
 
 /** What a client asks for when it joins. */
 export type JoinRequest = Omit<Extract<ClientMessage, { readonly _tag: "join" }>, "_tag">
@@ -126,6 +128,10 @@ const quickPlayMatch = Effect.gen(function* () {
 /** Builds the registry; room loops run in the Layer's scope. */
 export const make = Effect.gen(function* () {
   const scope = yield* Effect.scope
+  // Every match shares the one generated galleon; building it here keeps its ~150 ms out of the first room's ticks.
+  const started = yield* Clock.currentTimeMillis
+  const galleon = galleonClass()
+  yield* Effect.logInfo(`galleon generated: ${galleon.graph.count} parts in ${(yield* Clock.currentTimeMillis) - started} ms`)
   const rooms = new Map<number, Room>()
   // Serialises joins and leaves so a room cannot be picked while its last member is closing it.
   const lifecycle = yield* Semaphore.make(1)
@@ -228,6 +234,7 @@ export const make = Effect.gen(function* () {
           phase: phaseSnapshot(room.state.phase),
           wind: windSnapshot(room.state),
           ships: room.state.ships.map(shipSnapshot),
+          wrecks: wreckSnapshots(room.state),
         }),
       )
       yield* Effect.logInfo(`${id} joined room ${room.id} (${room.state.ships.length} ships)`)

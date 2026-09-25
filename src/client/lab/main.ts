@@ -23,7 +23,7 @@ import { generateShip } from "../../sim/ship/generate.ts"
 import { tuning } from "../../sim/tuning.ts"
 import type { Vec3 } from "../../sim/vector.ts"
 import { brickColors } from "../bricks/colors.ts"
-import { removeAndReveal } from "../bricks/ship-wreck.ts"
+import { removeAndReveal, wholeShip } from "../bricks/ship-wreck.ts"
 import { ChipLayer, chipSpawn } from "../game/debris.ts"
 import { partIds } from "../../sim/ship/parts.ts"
 import { rigLayout } from "../../sim/ship/rig.ts"
@@ -314,7 +314,7 @@ const fireRay = (origin: Vec3, direction: Vec3) => {
   const hit = damage.hit(point, direction)
   const sim = performance.now() - simStart
   const viewStart = performance.now()
-  const revealed = removeAndReveal(ship, built.air, [...hit.removed, ...hit.detached])
+  const revealed = removeAndReveal(wholeShip(ship), built.air, [...hit.removed, ...hit.detached])
   const view = performance.now() - viewStart
   hp = Math.max(0, hp - hitDamage(hit.zone))
   throwParts(hit.removed, direction, 7)

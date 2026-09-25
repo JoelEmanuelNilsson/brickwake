@@ -1,9 +1,12 @@
 import { Matrix4, Vector3 } from "three"
 import { gunLayout } from "../../sim/gun-layout.ts"
 import { partCatalog } from "../../sim/ship/parts.ts"
-import { generateShip, gridMetres } from "../../sim/ship/generate.ts"
+import type { ShipAir } from "../../sim/ship/air.ts"
+import type { DamageGraph } from "../../sim/ship/damage.ts"
+import { gridMetres } from "../../sim/ship/generate.ts"
 import { rigLayout } from "../../sim/ship/rig.ts"
 import { galleonSpec } from "../../sim/ship/spec.ts"
+import { galleonClass } from "../../sim/wreck.ts"
 import { type BrickLibrary, type BrickPlacement, type BrickPlug, createBrickLibrary } from "../bricks/brick-ship-mesh.ts"
 import { shipPlacements } from "../bricks/ship-placements.ts"
 import { buildRigGeometry, type RigGeometry } from "../rig/ship-rig.ts"
@@ -38,8 +41,12 @@ export interface GalleonModel {
   /** Moving parts above this height are yards; below it, cannons. */
   readonly yardFloor: number
   readonly guns: ReadonlyArray<DrawnGun>
-  /** Ship part index → where it is drawn; undefined for parts no air reaches. */
+  /** Ship part index → where it is drawn. */
   readonly slots: ReadonlyArray<PartSlot | undefined>
+  /** The damage graph the server's sim uses, for deriving the parts that fall with removed ones. */
+  readonly graph: DamageGraph
+  /** Air around the intact ship; each view holes its own copy. */
+  readonly air: ShipAir
   /** Milliseconds generation and placement took. */
   readonly buildMs: number
 }
@@ -58,7 +65,7 @@ const rudderCourses = [
 export const loadGalleon = (): GalleonModel => {
   const started = performance.now()
   const spec = galleonSpec
-  const ship = generateShip(spec)
+  const { ship, graph } = galleonClass()
   const built = shipPlacements(spec, ship)
   const layout = rigLayout(spec)
   const mastXs = layout.masts.map((mast) => mast.x)
@@ -134,6 +141,8 @@ export const loadGalleon = (): GalleonModel => {
     yardFloor,
     guns,
     slots,
+    graph,
+    air: built.air,
     buildMs: performance.now() - started,
   }
 }

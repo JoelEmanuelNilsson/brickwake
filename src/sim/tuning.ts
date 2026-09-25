@@ -18,7 +18,7 @@ export const tuning = {
     substeps: 4,
   },
   hull: {
-    /** Hit box, ship-local. */
+    /** Hull box, ship-local: the extent the sinking flood and ship views measure against. Balls strike the brick parts (`wreck.ts`). */
     hitBox: { length: 28, beam: 8, bottom: -2, top: 5 },
     /**
      * Hull lines as stations from stern to bow: x, half-breadth, keel depth below the waterline,
@@ -163,6 +163,12 @@ export const tuning = {
     sailsPerBall: 1,
     /** Bricks a ball knocks out: those within `radius` m of its path over the first `depth` m from the impact, nearest first, at most the cap of the zone it struck. */
     bricks: { radius: 0.5, depth: 0.9, hullCap: 12, upperWorksCap: 6 },
+    /**
+     * Holes at the waterline let the sea in as the ship rolls and heaves: each hull part gone whose bottom was below
+     * `height` m costs the nearest buoyancy column `perPart` of its lift, at most `maxPerColumn`, so a ship holed on
+     * one side lists to it.
+     */
+    flooding: { height: 0.5, perPart: 0.08, maxPerColumn: 0.7 },
   },
   sinking: {
     /** Seconds from HP 0 until the ship is under and out of play; it takes no orders and cannot be hit meanwhile. */

@@ -4,6 +4,7 @@ import { HttpServer } from "effect/unstable/http"
 import { ballFromWire, ServerMessageJson, type ServerMessage } from "../protocol/messages.ts"
 import { ballPositionAt } from "../sim/gunnery.ts"
 import { seas, swell } from "../sim/ocean.ts"
+import { hitDamage } from "../sim/ship/damage.ts"
 import { dummyShipId, duelShipIds, scenarioShipId } from "../sim/scenarios.ts"
 import { SIM_HZ, tuning } from "../sim/tuning.ts"
 import type { NetworkLag } from "./lag.ts"
@@ -259,9 +260,9 @@ test("injected latency delays both directions", async () => {
   }
 })
 
-test("a broadside at the target dummy fires, hits and lowers its HP; refusals say why", async () => {
+test("a broadside at the target dummy fires, hits, breaks bricks and lowers its HP; refusals say why; a late joiner gets the wreck", async () => {
   const client = await connect(server.url)
-  client.send({ _tag: "join", mode: "ffa", scenario: "target-dummy" })
+  client.send({ _tag: "join", mode: "ffa", scenario: "target-dummy", room: "wreck-test" })
   const welcome = await client.nextOf("welcome", 0)
   const dummy = welcome.ships.find((ship) => ship.id === dummyShipId)!
   expect(dummy.hp).toBe(100)
@@ -283,8 +284,17 @@ test("a broadside at the target dummy fires, hits and lowers its HP; refusals sa
     expect(Math.hypot(at.x - hit.point[0], at.y - hit.point[1], at.z - hit.point[2])).toBeLessThan(0.01)
   }
   const last = client.snapshots().at(-1)!.snapshot.ships.find((ship) => ship.id === dummyShipId)!
-  expect(last.hp).toBe(100 - 5 * hits.length)
-  await client.close()
+  expect(last.hp).toBe(100 - hits.reduce((sum, hit) => sum + hitDamage(hit.zone), 0))
+  const removed = hits.flatMap((hit) => hit.removed)
+  expect(removed.length).toBeGreaterThan(0)
+
+  const late = await connect(server.url)
+  late.send({ _tag: "join", mode: "ffa", scenario: "target-dummy", room: "wreck-test" })
+  const lateWelcome = await late.nextOf("welcome", 0)
+  expect(lateWelcome.shipId).toBe(dummyShipId)
+  expect(lateWelcome.wrecks).toEqual([{ shipId: dummyShipId, removed }])
+  console.log(`ballHit ${Math.round(JSON.stringify(hits[0]).length)} B; late welcome ${JSON.stringify(lateWelcome).length} B with ${removed.length} removed parts`)
+  await Promise.all([client.close(), late.close()])
 })
 
 test("two clients naming one duel room share it; A sinks B and the wire carries the sink, the score and the phase", async () => {

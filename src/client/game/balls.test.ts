@@ -47,7 +47,7 @@ test("a ball appears at its fire time and ends at its impact time, not when the 
 test("a ripple broadside fires gun by gun and each ball ends on its own", () => {
   const { balls, log } = record()
   for (let i = 0; i < 3; i++) balls.onEvent(fired(10 + i, 1 + i * 0.05))
-  balls.onEvent({ _tag: "ballHit", tick: 50, time: 1.6, ballId: 11, shooter: shipId("player"), target: shipId("dummy"), point: [0, 1, 50], localPoint: [0, 1, 4], damage: 5, hp: 95 })
+  balls.onEvent({ _tag: "ballHit", tick: 50, time: 1.6, ballId: 11, shooter: shipId("player"), target: shipId("dummy"), point: [0, 1, 50], localPoint: [0, 1, 4], zone: "hull", removed: [], damage: 5, hp: 95 })
   balls.update(1.07)
   expect(log).toEqual(["fired 10", "fired 11"])
   balls.update(1.7)

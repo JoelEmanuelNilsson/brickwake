@@ -4,7 +4,7 @@ import { generateShip } from "../../sim/ship/generate.ts"
 import { galleonSpec } from "../../sim/ship/spec.ts"
 import { BrickShipMesh, createBrickLibrary } from "./brick-ship-mesh.ts"
 import { shipPlacements } from "./ship-placements.ts"
-import { removeAndReveal } from "./ship-wreck.ts"
+import { removeAndReveal, wholeShip } from "./ship-wreck.ts"
 
 const library = createBrickLibrary()
 const ship = generateShip(galleonSpec)
@@ -19,7 +19,7 @@ test("a breach below the gun deck reveals the hold behind it at every detail lev
   const distance = damage.firstPartAlong({ x: 0, y: 0.2, z: -30 }, direction, 60) ?? 0
   const hit = damage.hit({ x: 0, y: 0.2, z: -30 + distance }, direction)
   const gone = [...hit.removed, ...hit.detached]
-  const revealed = removeAndReveal(mesh, air, gone)
+  const revealed = removeAndReveal(wholeShip(mesh), air, gone)
   expect(revealed).toBeGreaterThan(50)
   const shown = placements.flatMap((p, i) => (p.hidden === true && mesh.isShown(i) ? [i] : []))
   expect(shown).toHaveLength(revealed)
@@ -43,7 +43,7 @@ test("the graph builds in a few ms, and a hit with its mesh update and reveals c
       const distance = damage.firstPartAlong({ x, y, z: -30 }, direction, 60)
       if (distance === undefined) continue
       const hit = damage.hit({ x, y, z: -30 + distance }, direction)
-      removeAndReveal(mesh, air, [...hit.removed, ...hit.detached])
+      removeAndReveal(wholeShip(mesh), air, [...hit.removed, ...hit.detached])
       hits++
     }
   expect(buildMs).toBeLessThan(20)
@@ -62,4 +62,22 @@ test("pools are sized for every part: revealing all hidden parts draws them all 
   expect(mesh.stats("near").parts).toBe(placements.length)
   expect(mesh.stats("far").parts).toBe(placements.length)
   expect(mesh.root.children.flatMap((layer) => layer.children)).toEqual(meshes)
+})
+
+test("a holed ship restored for reuse draws exactly what it drew when built, and a cloned air holes the same way", () => {
+  const { placements, plugs, air } = shipPlacements(galleonSpec, ship)
+  const mesh = new BrickShipMesh(library, placements, plugs)
+  const levels = ["near", "mid", "far"] as const
+  const built = levels.map((level) => mesh.stats(level))
+  const damage = new ShipDamage(graph)
+  const direction = { x: 0, y: 0, z: 1 }
+  const distance = damage.firstPartAlong({ x: 2, y: 0.4, z: -30 }, direction, 60) ?? 0
+  const hit = damage.hit({ x: 2, y: 0.4, z: -30 + distance }, direction)
+  const holed = air.clone()
+  const revealed = removeAndReveal(wholeShip(mesh), holed, [...hit.removed, ...hit.detached])
+  expect(revealed).toBeGreaterThan(0)
+  mesh.restore()
+  expect(levels.map((level) => mesh.stats(level))).toEqual(built)
+  expect(mesh.partCount).toBe(placements.length)
+  expect(removeAndReveal(wholeShip(mesh), air.clone(), [...hit.removed, ...hit.detached])).toBe(revealed)
 })
