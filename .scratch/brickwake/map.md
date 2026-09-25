@@ -70,6 +70,7 @@ flowchart LR
 - [Brick damage in the sim and network](issues/14-brick-damage-in-sim.md) — `ShipState.removedParts` ordered list; ballHit carries zone + removed; balls pass through holes; flooding built (waterline losses cut buoyancy, 3.5° list at 30 HP); 2.2 ms/tick with 144 balls; `bun run shot c6` late joiner.
 - [TDM, team sails and menus](issues/18-tdm-and-menus.md) — Pirates vs Navy (20 sinks/10 min), balanced bots, no friendly damage; title with FFA/TDM one-click, results with per-player stats; matte sails read black-with-skull at ref-01.
 - [Gunport aim view](issues/17-gunport-view.md) — right-mouse view eases in over 0.5 s, rides the roll, keeps the reticle point, 4.4–5.4 ms; ports too small to show the gun deck → [Gun decks you can see into](issues/20-open-gun-decks.md). c7 blend check is timing-sensitive under core load.
+- [Gun decks you can see into](issues/20-open-gun-decks.md) — 3×9 ports, cannons inboard on carriages, deck interior; near 261k+4.5k rig, fleet 8.4 ms synced; 21.5 hits to sink; gun heights 1.38/3.46 m; open: oblique ref-04 angle, sunlit port slots, bots can drift past the arena edge (seed swap hid it).
 
 ## Not yet specified
 
