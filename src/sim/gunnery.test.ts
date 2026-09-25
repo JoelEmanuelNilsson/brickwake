@@ -221,7 +221,9 @@ test("a broadside rocks the ship: recoil heels it away from the target", () => {
 })
 
 test("a broadside aimed at a point on a hull strikes the hull about that point", () => {
-  const start = scenarios["target-dummy"]
+  const drifting = scenarios["target-dummy"]
+  // A still target: this measures where the aim meets the hull, not how far the dummy drifts during the flight.
+  const start = { ...drifting, ships: drifting.ships.map((ship) => (ship.id === dummyShipId ? { ...ship, controls: { rudder: 0, sail: 0 } as const } : ship)) }
   const dummy = start.ships.find((ship) => ship.id === dummyShipId)!
   const own = start.ships.find((ship) => ship.id === scenarioShipId)!
   // The client's reticle meets the hull where the eye's ray first strikes a part: do the same from above our deck.

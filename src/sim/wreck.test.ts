@@ -101,7 +101,7 @@ test("a ball through set sails tears each and flies on for 1 HP each; furled sai
   const ship = scenarios.calm.ships[0]!
   // Near level at 7.6–8.1 m through the three courses, clear of the masts and yards.
   const along = ballFrom(1, shipPointToWorld(ship, vec3(40, 7.6, 2.2)), vec3(-tuning.guns.muzzleSpeed, 3, 0))
-  const set = flyOne({ ...scenarios.calm, ships: [{ ...ship, sailSet: 1 }] }, along)
+  const set = flyOne({ ...scenarios.calm, ships: [{ ...ship, sailSet: 1, controls: { rudder: 0, sail: 2 } }] }, along)
   const sails = eventsOf(set.events, "sailHit")
   expect(sails.map((sail) => Math.round(sail.localPoint.x * 10) / 10)).toEqual([10.8, 0.4, -8.4])
   expect(sails.map((sail) => sail.hp)).toEqual(sails.map((_, i) => tuning.damage.hullHp - (i + 1) * tuning.damage.sailsPerBall))
