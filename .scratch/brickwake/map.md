@@ -60,6 +60,7 @@ flowchart LR
 - [Hull generator from ShipSpec](issues/09-hull-generator.md) — pure `src/sim/ship/` generator (3,665 parts, ~110 ms); hull alone renders 286.9k tris, 12 hulls 6.0–10.4 ms at DPR 1.5 — full ship needs distance LOD to fit budget; gun ports 2.8 m on stud grid.
 - [Client: firing, ball arcs and first-pass effects](issues/05-client-gunnery.md) — reticle on the sampled sea, tick-synced balls, pooled `game.effects` (flash, smoke, splash, chips); 4–9/12 hits at 150 m; debug hook `fireAt`/`orbit`.
 - [Match rules, sinking and HUD](issues/06-match-rules-and-hud.md) — `rules.ts` mode switches (TDM = new cases), ship `life`/`spawn`/kills on the wire, physical stern-first sinking, pirate HUD + hit indicator; `bun run shot c3` two-browser check; 257 B/ship.
+- [Galleon: decks, castles and cannons](issues/10-galleon-hull-decks-guns.md) — 4,323 parts, 24 cannons on two decks; 3 LODs (near 236k tris/36 draws, mid 61k, far 40k); fleet of 12 at 7.2 ms median; revealed-on-hit parts need growable instance pools.
 
 ## Not yet specified
 
