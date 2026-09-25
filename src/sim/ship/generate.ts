@@ -1,7 +1,8 @@
+import type { Assembly } from "./assemblies.ts"
 import type { BrickColor } from "./colors.ts"
 import type { PartId } from "./parts.ts"
 import type { Curve, ShipSpec } from "./spec.ts"
-import { connectParts, footprint, heightInPlates, keelParts, reachable, type QuarterTurns, type ShipEdge, type ShipPart } from "./structure.ts"
+import { connectParts, footprint, heightInPlates, keelParts, occupiedCells, reachable, type QuarterTurns, type ShipEdge, type ShipPart } from "./structure.ts"
 
 /** A generated ship: its parts, their stud connections and the keel parts damage floods from. */
 export interface GeneratedShip {
@@ -10,6 +11,8 @@ export interface GeneratedShip {
   readonly keel: ReadonlyArray<number>
   /** Gunport openings carved into the hull, grid units, [from, to) ranges. */
   readonly ports: ReadonlyArray<GunPort>
+  /** Hull wall cells carved open for gunports: sealing them separates the inside of the hull from the outside. */
+  readonly openings: ReadonlyArray<readonly [number, number, number]>
   /** Parts dropped because no joint placement could attach them to the keel. */
   readonly pruned: number
 }
@@ -23,6 +26,32 @@ export interface GunPort {
 
 /** Metres per stud and per plate. */
 export const gridMetres = { stud: 0.4, plate: 0.16 } as const
+
+const mirroredTurns = (turns: QuarterTurns): QuarterTurns => (turns % 2 === 0 ? ((turns + 2) % 4) as QuarterTurns : turns)
+const mirroredPart: Partial<Record<PartId, PartId>> = { "41769": "41770", "41770": "41769", "43722": "43723", "43723": "43722", "24307": "24299", "24299": "24307" }
+
+/**
+ * An assembly's parts on the ship grid: turned `turns` quarter turns about +y, moved so the min corner of
+ * its footprint sits on the anchor cell, then, when `mirror`, reflected across the centreline.
+ */
+export const placeAssembly = (assembly: Assembly, x: number, y: number, z: number, turns: QuarterTurns, mirror: boolean): ReadonlyArray<ShipPart> => {
+  const turned = assembly.parts.map((p) => {
+    let [px, pz] = [p.x, p.z]
+    let [fx, fz] = footprint(p)
+    for (let t = 0; t < turns; t++) {
+      // A quarter turn maps (x, z) to (z, -x); the footprint's min corner follows.
+      ;[px, pz] = [pz, -px - fx]
+      ;[fx, fz] = [fz, fx]
+    }
+    return { ...p, x: px, z: pz, turns: ((p.turns + turns) % 4) as QuarterTurns }
+  })
+  const minX = Math.min(...turned.map((p) => p.x))
+  const minZ = Math.min(...turned.map((p) => p.z))
+  return turned.map((p) => {
+    const placed: ShipPart = { ...p, x: x + p.x - minX, y: y + p.y, z: z + p.z - minZ }
+    return mirror ? { ...placed, part: mirroredPart[placed.part] ?? placed.part, z: -placed.z - (footprint(placed)[1] ?? 1), turns: mirroredTurns(placed.turns) } : placed
+  })
+}
 
 /** Samples a piecewise-linear curve, clamped at both ends. */
 export const sampleCurve = (curve: Curve, t: number): number => {
@@ -144,7 +173,8 @@ export const generateShip = (spec: ShipSpec): GeneratedShip => {
   }
   const planEnd = spec.plan[spec.plan.length - 1]?.[0] ?? 0
   const lengthX = Math.ceil(planEnd + spec.stemRake * (height - spec.waterline)) + 2
-  const half = Math.ceil(spec.plan.reduce((m, [, hb]) => Math.max(m, hb), 0) * spec.section.reduce((m, [, f]) => Math.max(m, f), 0))
+  // Two studs of margin outside the widest hull for the gunport frames that stand proud of it.
+  const half = Math.ceil(spec.plan.reduce((m, [, hb]) => Math.max(m, hb), 0) * spec.section.reduce((m, [, f]) => Math.max(m, f), 0)) + 2
   const widthZ = 2 * half
   const inGrid = (x: number, p: number, z: number) => x >= 0 && x < lengthX && p >= 0 && p < height && z >= -half && z < half
   const at = (x: number, p: number, z: number) => (x * height + p) * widthZ + z + half
@@ -222,20 +252,93 @@ export const generateShip = (spec: ShipSpec): GeneratedShip => {
     }
   }
 
+  const paint = new Map<number, BrickColor>()
+  const openings: Array<readonly [number, number, number]> = []
+  const carve = (x: number, p: number, z: number) => {
+    if (!inGrid(x, p, z) || kind[at(x, p, z)] !== wall) return false
+    kind[at(x, p, z)] = empty
+    return true
+  }
+  const build = (x: number, p: number, z: number, c: BrickColor) => {
+    if (!inGrid(x, p, z)) return
+    if (kind[at(x, p, z)] === empty) {
+      kind[at(x, p, z)] = wall
+      face[at(x, p, z)] = 1
+    }
+    paint.set(at(x, p, z), c)
+  }
+  const fixtures: Array<ShipPart> = []
   const ports: Array<GunPort> = []
   for (const deck of spec.guns.decks) {
     const centre = spec.waterline + deck.height / gridMetres.plate
     const y0 = Math.round(centre - spec.port.height / 2)
+    const y1 = y0 + spec.port.height
+    const faceZ = Math.round(deck.halfBeam / gridMetres.stud)
     for (const gx of deck.xs) {
       const x0 = Math.round(spec.midship + gx / gridMetres.stud - spec.port.width / 2)
+      const x1 = x0 + spec.port.width
       for (const side of ["port", "starboard"] as const) {
-        ports.push({ side, x: [x0, x0 + spec.port.width], y: [y0, y0 + spec.port.height] })
-        for (let x = x0; x < x0 + spec.port.width; x++)
-          for (let p = y0; p < y0 + spec.port.height; p++)
-            for (let z = side === "port" ? -half : 0; z < (side === "port" ? 0 : half); z++) if (inGrid(x, p, z) && kind[at(x, p, z)] === wall) kind[at(x, p, z)] = empty
+        const zOf = (z: number) => (side === "port" ? -1 - z : z)
+        ports.push({ side, x: [x0, x1], y: [y0, y1] })
+        for (let x = x0; x < x1; x++) for (let p = y0; p < y1; p++) for (let z = 0; z < half; z++) if (carve(x, p, zOf(z))) openings.push([x, p, zOf(z)])
+        // The frame: the hull's outer cell and one stud proud of it, so every frame part bonds into the wall.
+        for (const z of [faceZ - 1, faceZ]) {
+          for (const x of [x0 - 1, x1]) for (let p = y0; p < y1; p++) build(x, p, zOf(z), spec.portFrame.jamb)
+          for (let x = x0 - 1; x <= x1; x++) {
+            build(x, y0 - 1, zOf(z), spec.portFrame.sill)
+            build(x, y1, zOf(z), spec.portFrame.lintel)
+          }
+        }
+        // Two studs inboard of the face puts the muzzle a stud and a half past the frame.
+        fixtures.push(...placeAssembly(spec.gun, x0, y0, faceZ - 2, 0, side === "port"))
       }
     }
   }
+
+  // Stern panels paint or glaze the transom's outer face; windows sit a stud deep behind a carved recess.
+  const transomFace = (p: number, z: number) => {
+    for (let x = 0; x <= spec.transom.x; x++) if (inGrid(x, p, z) && kind[at(x, p, z)] !== empty) return kind[at(x, p, z)] === wall ? x : undefined
+    return undefined
+  }
+  for (const panel of spec.stern)
+    for (const sign of [1, -1])
+      for (let zs = panel.z[0]; zs < panel.z[1]; zs++)
+        for (let p = panel.y[0]; p < panel.y[1]; p++) {
+          const z = sign > 0 ? zs : -1 - zs
+          const x = transomFace(p, z)
+          if (x === undefined) continue
+          if (panel.fill !== "window") build(x, p, z, panel.fill)
+          else if (inGrid(x + 1, p, z) && kind[at(x + 1, p, z)] === wall) {
+            carve(x, p, z)
+            build(x + 1, p, z, "transOrange")
+          }
+        }
+  for (let z = -half; z < half; z++) {
+    const x = transomFace(spec.gallery.y, z)
+    if (x !== undefined && x > 0) build(x - 1, spec.gallery.y, z, spec.gallery.color)
+  }
+
+  // Ornaments: "top" anchors stand on the column's highest cell; wall cells they sit in are carved for them.
+  const columnTop = (x: number, z: number) => {
+    for (let p = height - 1; p >= 0; p--) if (inGrid(x, p, z) && kind[at(x, p, z)] !== empty) return p + 1
+    return 0
+  }
+  for (const o of spec.ornaments) {
+    const y = o.y === "top" ? columnTop(o.x, o.z) : o.y
+    for (const mirror of o.mirror === true ? [false, true] : [false]) fixtures.push(...placeAssembly(o.assembly, o.x, y, o.z, o.turns ?? 0, mirror))
+  }
+  const reserved = new Uint8Array(inside.length)
+  for (const f of fixtures)
+    for (const [x, p, z] of occupiedCells(f)) {
+      if (!inGrid(x, p, z)) continue
+      if (kind[at(x, p, z)] === wall) carve(x, p, z)
+      kind[at(x, p, z)] = empty
+      reserved[at(x, p, z)] = 1
+    }
+  // A tile deck turns to plates wherever something stands on it, so it has studs to hold on to.
+  for (let x = 0; x < lengthX; x++)
+    for (let p = 0; p + 1 < height; p++)
+      for (let z = -half; z < half; z++) if (kind[at(x, p, z)] === tile && (kind[at(x, p + 1, z)] !== empty || reserved[at(x, p + 1, z)] === 1)) kind[at(x, p, z)] = plank
 
   const colorTable: Array<BrickColor> = []
   const colorIndex = (c: BrickColor) => {
@@ -251,7 +354,8 @@ export const generateShip = (spec: ShipSpec): GeneratedShip => {
     for (let p = 0; p < height; p++)
       for (let z = -half; z < half; z++) {
         const k = kind[at(x, p, z)]
-        if (k === wall) color[at(x, p, z)] = colorIndex(strakeOf(x, layerStart(x, p), layerEnd(x, p))?.color ?? "black")
+        const painted = paint.get(at(x, p, z))
+        if (k === wall) color[at(x, p, z)] = colorIndex(painted ?? strakeOf(x, layerStart(x, p), layerEnd(x, p))?.color ?? "black")
         else if (k !== empty) color[at(x, p, z)] = colorIndex(spec.deckColor)
       }
 
@@ -487,7 +591,7 @@ export const generateShip = (spec: ShipSpec): GeneratedShip => {
     }
   }
 
-  const mottled = repairConnections(parts).map((p): ShipPart => {
+  const mottled = [...repairConnections(parts), ...fixtures].map((p): ShipPart => {
     // Plates and tiles stay plain: mottle on one-plate courses reads as noise at game distance.
     if (!Object.values(bricks).includes(p.part) && p.color !== spec.deckColor) return p
     const roll = hash(p.x, p.y, p.z, 7)
@@ -499,5 +603,5 @@ export const generateShip = (spec: ShipSpec): GeneratedShip => {
   const seen = reachable(mottled.length, connectParts(mottled), keelParts(mottled))
   const attached = mottled.filter((_, i) => seen[i] === 1)
   const edges = connectParts(attached)
-  return { parts: attached, edges, keel: keelParts(attached), ports, pruned: mottled.length - attached.length }
+  return { parts: attached, edges, keel: keelParts(attached), ports, openings, pruned: mottled.length - attached.length }
 }

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { InstancedMesh, Matrix4, Vector3 } from "three"
-import { type BrickPlacement, BrickShipMesh, createBrickLibrary } from "./brick-ship-mesh.ts"
+import { type BrickPlacement, BrickShipMesh, brickDetailFor, createBrickLibrary } from "./brick-ship-mesh.ts"
 import { type PartId, partCatalog, partIds } from "../../sim/ship/parts.ts"
 import { buildPartGeometry, gridMatrix } from "./parts.ts"
 
@@ -86,4 +86,34 @@ test("covered studs start hidden and can be shown when their cover falls", () =>
   expect(ship.stats().studs).toBe(1)
   ship.remove(0)
   expect(ship.stats()).toEqual({ parts: 0, studs: 0, draws: 0, triangles: 0 })
+})
+
+test("detail follows on-screen size with hysteresis, and a first pick uses the band midpoints", () => {
+  expect(brickDetailFor(40)).toBe("near")
+  expect(brickDetailFor(23)).toBe("mid")
+  expect(brickDetailFor(23, "near")).toBe("near")
+  expect(brickDetailFor(21, "near")).toBe("mid")
+  expect(brickDetailFor(25, "mid")).toBe("mid")
+  expect(brickDetailFor(27, "mid")).toBe("near")
+  expect(brickDetailFor(8, "mid")).toBe("mid")
+  expect(brickDetailFor(8, "far")).toBe("far")
+  expect(brickDetailFor(3)).toBe("far")
+})
+
+test("removing a part takes it out of every detail level, with the plug it owns", () => {
+  const placements: Array<BrickPlacement> = [
+    { part: "3001", color: "black", matrix: gridMatrix(0, 0, 0) },
+    { part: "3001", color: "black", matrix: gridMatrix(4, 0, 0), interior: true },
+    { part: "3040b", color: "darkRed", matrix: gridMatrix(8, 0, 0) },
+  ]
+  const ship = new BrickShipMesh(library, placements, [{ owner: 2, matrix: gridMatrix(8, 0, 2) }])
+  expect(ship.stats("far")).toMatchObject({ parts: 2, studs: 0, draws: 3 })
+  expect(ship.stats("mid")).toMatchObject({ parts: 3, studs: 17 })
+  ship.setDetail("far")
+  expect(ship.root.getObjectByName("part 3001")?.parent?.visible).toBe(false)
+  ship.remove(2)
+  ship.remove(1)
+  expect(ship.stats("far")).toMatchObject({ parts: 1, draws: 1 })
+  expect(ship.stats("mid")).toMatchObject({ parts: 1, studs: 8, draws: 2 })
+  expect(ship.stats("near")).toMatchObject({ parts: 1, studs: 8, draws: 2 })
 })

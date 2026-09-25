@@ -87,7 +87,11 @@ export class PartMesher {
     }
   }
 
-  /** Extrude a convex profile from `from` to `to` along `axis`, chamfering every edge. */
+  /**
+   * Extrude a convex profile from `from` to `to` along `axis`, chamfering every edge. Along y the bottom edge
+   * is left square: it sits on the course below, where the top bevel alone draws the seam, and skipping it
+   * saves a quarter of a brick's triangles.
+   */
   prism(profile: ReadonlyArray<Point2>, axis: PrismAxis, from: number, to: number, transform: Matrix4 = identity, chamfer = edgeChamfer): void {
     // (u, v, w) is a right-handed cyclic permutation of (x, y, z), so a CCW profile gives outward faces.
     let points = profile.map((p): Point2 => (axis === "z" ? p : [p[1], p[0]]))
@@ -96,9 +100,12 @@ export class PartMesher {
     const inner = chamfer > 0 ? inset(outer, chamfer) : outer
     const toXyz = ([u, v]: Point2, w: number): Point3 => (axis === "z" ? [u, v, w] : axis === "x" ? [w, u, v] : [v, w, u])
     const rings: ReadonlyArray<readonly [ReadonlyArray<Point2>, number]> =
-      chamfer > 0
-        ? [[inner, from], [outer, from + chamfer], [outer, to - chamfer], [inner, to]]
-        : [[outer, from], [outer, to]]
+      chamfer <= 0
+        ? [[outer, from], [outer, to]]
+        : axis === "y"
+          ? [[outer, from], [outer, to - chamfer], [inner, to]]
+          : [[inner, from], [outer, from + chamfer], [outer, to - chamfer], [inner, to]]
+    const bottom = chamfer > 0 && axis !== "y" ? inner : outer
     for (let k = 0; k + 1 < rings.length; k++) {
       const [lower, w0] = rings[k] ?? [[], 0]
       const [upper, w1] = rings[k + 1] ?? [[], 0]
@@ -112,7 +119,7 @@ export class PartMesher {
       }
     }
     for (let i = 1; i + 1 < inner.length; i++) {
-      this.triangle(toXyz(at(inner, 0), from), toXyz(at(inner, i + 1), from), toXyz(at(inner, i), from), transform)
+      this.triangle(toXyz(at(bottom, 0), from), toXyz(at(bottom, i + 1), from), toXyz(at(bottom, i), from), transform)
       this.triangle(toXyz(at(inner, 0), to), toXyz(at(inner, i), to), toXyz(at(inner, i + 1), to), transform)
     }
   }

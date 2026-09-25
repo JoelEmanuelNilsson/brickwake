@@ -8,7 +8,7 @@
     "typecheck": "tsc --noEmit",
     "shot": "bun scripts/shot.ts",
     "shot:lab": "bun scripts/shot-lab.ts",
-    "shot:hull": "bun scripts/shot-hull.ts"
+    "shot:galleon": "bun scripts/shot-galleon.ts"
   },
   "dependencies": {
     "@effect/platform-bun": "4.0.0-rc.115",

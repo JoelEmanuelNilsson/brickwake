@@ -1,5 +1,7 @@
 import { galleonGunSpec, type GunLayoutSpec } from "../gun-layout.ts"
+import { type Assembly, balustrade, cannon, figurehead, galleryRail, helm, lanternPost, railPost, skullPlaque, tallLanternPost } from "./assemblies.ts"
 import type { BrickColor } from "./colors.ts"
+import type { QuarterTurns } from "./structure.ts"
 
 /** A piecewise-linear curve as [input, output] points with increasing inputs; clamped at both ends. */
 export type Curve = ReadonlyArray<readonly [number, number]>
@@ -25,11 +27,28 @@ export interface Castle {
 export interface Deck {
   readonly beams: number
   readonly planks: number
-  /** Studded plates, or tiles where nothing is built on the deck and studs would only cost triangles. */
+  /** Studded plates, or tiles; tile decks turn to plates under anything built on them. */
   readonly surface: "plates" | "tiles"
   /** Stud x range from the stern, [from, to). */
   readonly from: number
   readonly to: number
+}
+
+/** A panel on the transom's outer face, [from, to) in z studs and y plates: a window glazed a stud deep, or a colour. Mirrored across the centreline. */
+export interface SternPanel {
+  readonly z: readonly [number, number]
+  readonly y: readonly [number, number]
+  readonly fill: "window" | BrickColor
+}
+
+/** An assembly placed by anchor cell; `y: "top"` stands it on the highest cell of the anchor column. `mirror` adds the port-side twin. */
+export interface Ornament {
+  readonly assembly: Assembly
+  readonly x: number
+  readonly y: number | "top"
+  readonly z: number
+  readonly turns?: QuarterTurns
+  readonly mirror?: boolean
 }
 
 /**
@@ -72,6 +91,14 @@ export interface ShipSpec {
   readonly guns: GunLayoutSpec
   /** Gunport opening size: width in studs, height in plates. */
   readonly port: { readonly width: number; readonly height: number }
+  /** Colours of the frame around each gunport, a stud proud of the hull: side jambs, sill below, lintel above. */
+  readonly portFrame: { readonly jamb: BrickColor; readonly sill: BrickColor; readonly lintel: BrickColor }
+  /** The assembly at every gunport, anchored at the port's inboard-aft bottom corner, muzzle out. */
+  readonly gun: Assembly
+  readonly stern: ReadonlyArray<SternPanel>
+  /** Stern gallery: a ledge a stud proud of the transom along the course at plate height `y`. */
+  readonly gallery: { readonly y: number; readonly color: BrickColor }
+  readonly ornaments: ReadonlyArray<Ornament>
   /** Accepted part count, [min, max]. */
   readonly partRange: readonly [number, number]
 }
@@ -109,10 +136,10 @@ export const galleonSpec: ShipSpec = {
   ],
   decks: [
     { beams: 16, planks: 17, surface: "tiles", from: 0, to: 99 },
-    { beams: 29, planks: 30, surface: "plates", from: 0, to: 99 },
-    { beams: 41, planks: 42, surface: "plates", from: 0, to: 22 },
-    { beams: 47, planks: 48, surface: "plates", from: 0, to: 11 },
-    { beams: 41, planks: 42, surface: "plates", from: 57, to: 99 },
+    { beams: 29, planks: 30, surface: "tiles", from: 0, to: 99 },
+    { beams: 41, planks: 42, surface: "tiles", from: 0, to: 22 },
+    { beams: 47, planks: 48, surface: "tiles", from: 0, to: 11 },
+    { beams: 41, planks: 42, surface: "tiles", from: 57, to: 99 },
   ],
   deckColor: "reddishBrown",
   deckMottle: [{ color: "darkTan", share: 0.12 }],
@@ -133,5 +160,54 @@ export const galleonSpec: ShipSpec = {
   ],
   guns: galleonGunSpec,
   port: { width: 2, height: 6 },
+  portFrame: { jamb: "darkRed", sill: "darkRed", lintel: "pearlGold" },
+  gun: cannon,
+  stern: [
+    { z: [1, 3], y: [31, 37], fill: "window" },
+    { z: [4, 6], y: [31, 37], fill: "window" },
+    { z: [3, 4], y: [31, 37], fill: "pearlGold" },
+    { z: [6, 8], y: [28, 37], fill: "pearlGold" },
+    { z: [1, 3], y: [43, 46], fill: "window" },
+    { z: [4, 6], y: [43, 46], fill: "window" },
+    { z: [0, 1], y: [43, 46], fill: "pearlGold" },
+    { z: [3, 4], y: [43, 46], fill: "pearlGold" },
+    { z: [6, 8], y: [38, 47], fill: "pearlGold" },
+    { z: [5, 8], y: [47, 52], fill: "pearlGold" },
+  ],
+  gallery: { y: 41, color: "pearlGold" },
+  ornaments: [
+    // Poop: stern crest between gold posts, balustrades, lanterns on the four corners.
+    { assembly: skullPlaque, x: 0, y: "top", z: -1, turns: 3 },
+    { assembly: skullPlaque, x: 2, y: 31, z: -1, turns: 3 },
+    { assembly: railPost, x: 0, y: "top", z: 1, mirror: true },
+    { assembly: balustrade, x: 0, y: "top", z: 2, turns: 1, mirror: true },
+    { assembly: tallLanternPost, x: 0, y: "top", z: 6, mirror: true },
+    { assembly: balustrade, x: 1, y: "top", z: 6, mirror: true },
+    { assembly: balustrade, x: 5, y: "top", z: 6, mirror: true },
+    { assembly: railPost, x: 9, y: "top", z: 6, mirror: true },
+    { assembly: tallLanternPost, x: 10, y: "top", z: 6, mirror: true },
+    // Stern gallery on the ledge: a low rail so the upper windows show, lanterns at its ends.
+    { assembly: lanternPost, x: 0, y: 42, z: 6, mirror: true },
+    { assembly: galleryRail, x: 0, y: 42, z: 2, turns: 1, mirror: true },
+    // Quarterdeck: helm, side and front balustrades, lanterns at the break.
+    { assembly: helm, x: 16, y: "top", z: -1 },
+    { assembly: balustrade, x: 11, y: "top", z: 6, mirror: true },
+    { assembly: balustrade, x: 15, y: "top", z: 6, mirror: true },
+    { assembly: railPost, x: 19, y: "top", z: 6, mirror: true },
+    { assembly: tallLanternPost, x: 21, y: "top", z: 7, mirror: true },
+    { assembly: balustrade, x: 21, y: "top", z: 2, turns: 1, mirror: true },
+    { assembly: railPost, x: 21, y: "top", z: 0, mirror: true },
+    // Waist rail: posts between the upper gunports, lanterns on two of them.
+    { assembly: lanternPost, x: 27, y: "top", z: 7, mirror: true },
+    { assembly: railPost, x: 34, y: "top", z: 7, mirror: true },
+    { assembly: lanternPost, x: 41, y: "top", z: 7, mirror: true },
+    { assembly: railPost, x: 48, y: "top", z: 7, mirror: true },
+    // Forecastle: aft balustrade and corner lanterns, side balustrades, bow crest.
+    { assembly: tallLanternPost, x: 57, y: "top", z: 6, mirror: true },
+    { assembly: balustrade, x: 57, y: "top", z: 2, turns: 1, mirror: true },
+    { assembly: railPost, x: 57, y: "top", z: 0, mirror: true },
+    { assembly: balustrade, x: 58, y: "top", z: 6, mirror: true },
+    { assembly: figurehead, x: 69, y: "top", z: -2, turns: 1 },
+  ],
   partRange: [2500, 6000],
 }
