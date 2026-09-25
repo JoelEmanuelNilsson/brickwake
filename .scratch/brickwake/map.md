@@ -48,7 +48,8 @@ flowchart LR
   13 --> 17[17 gunport view]
   13 --> 18[18 TDM + menus]
   17 --> 20[20 open gun decks]
-  15 & 16 & 17 & 18 & 20 --> 19[19 UX + final]
+  15 & 16 & 17 & 18 & 20 --> 21[21 gameplay tuning] & 22[22 visual polish]
+  21 & 22 --> 19[19 UX + final]
 ```
 
 ## Decisions so far
@@ -77,7 +78,6 @@ flowchart LR
 
 - Below-waterline holes and flooding driven by the removed-brick set: in scope only if
   14 shows it fits cheaply; otherwise it moves to Out of scope.
-- Final tuning numbers (wind, damage, reload, bot accuracy) are settled by play in 19.
 
 ## Out of scope
 
