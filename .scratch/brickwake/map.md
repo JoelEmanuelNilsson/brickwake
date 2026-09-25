@@ -47,7 +47,8 @@ flowchart LR
   13 --> 14[14 damage in sim] --> 15[15 destruction + effects]
   13 --> 17[17 gunport view]
   13 --> 18[18 TDM + menus]
-  15 & 16 & 17 & 18 --> 19[19 UX + final]
+  17 --> 20[20 open gun decks]
+  15 & 16 & 17 & 18 & 20 --> 19[19 UX + final]
 ```
 
 ## Decisions so far
@@ -68,6 +69,7 @@ flowchart LR
 - [Brick ships in the game and the premium scene](issues/13-brick-ships-in-game.md) — pooled `ShipView`s with rig, recoil, bracing yards; sky/fog/ACES/bloom, foam, wake, half-res soft smoke; 12-ship bot match 5.0 ms pipelined, 8.6 ms synced; sails read brown not black under sunset; sky near sun too creamy.
 - [Brick damage in the sim and network](issues/14-brick-damage-in-sim.md) — `ShipState.removedParts` ordered list; ballHit carries zone + removed; balls pass through holes; flooding built (waterline losses cut buoyancy, 3.5° list at 30 HP); 2.2 ms/tick with 144 balls; `bun run shot c6` late joiner.
 - [TDM, team sails and menus](issues/18-tdm-and-menus.md) — Pirates vs Navy (20 sinks/10 min), balanced bots, no friendly damage; title with FFA/TDM one-click, results with per-player stats; matte sails read black-with-skull at ref-01.
+- [Gunport aim view](issues/17-gunport-view.md) — right-mouse view eases in over 0.5 s, rides the roll, keeps the reticle point, 4.4–5.4 ms; ports too small to show the gun deck → [Gun decks you can see into](issues/20-open-gun-decks.md). c7 blend check is timing-sensitive under core load.
 
 ## Not yet specified
 

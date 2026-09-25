@@ -12,6 +12,7 @@ import { Effects } from "./effects.ts"
 import { type GalleonModel, loadGalleon } from "./galleon.ts"
 import { FrameStats } from "./frame-stats.ts"
 import { Gunnery } from "./gunnery.ts"
+import { GunDeckLanterns } from "./gunport-view.ts"
 import { HitIndicator } from "./hit-indicator.ts"
 import { Hud, type HudReading } from "./hud.ts"
 import { MatchHud, type MatchReading } from "./match-hud.ts"
@@ -93,6 +94,7 @@ export class Game {
   readonly #wake = new WakeField()
   readonly #galleon: GalleonModel
   readonly #wrecks: Wrecks
+  readonly #lanterns: GunDeckLanterns
   /** Built ships not in play: views are built at load, so a ship joining mid-match costs no frame. */
   readonly #spareViews: Array<ShipView> = []
   readonly #connection: Connection
@@ -210,12 +212,14 @@ export class Game {
     this.effects = new Effects(this.scene, sunDirection)
     this.#galleon = loadGalleon()
     this.#wrecks = new Wrecks(this.#galleon.graph)
+    this.#lanterns = new GunDeckLanterns(this.scene, this.#galleon)
     for (let i = 0; i < tuning.match.maxShips; i++) this.#spareViews.push(new ShipView(`spare ${i}`, this.#galleon))
     // Compile every ship shader now, so the first ship in view costs no frame.
     const warm = this.#spareViews[0]
     if (warm !== undefined) {
       this.scene.add(warm.group)
       this.renderer.compile(this.scene, new PerspectiveCamera())
+      this.#lanterns.compileLit(() => this.renderer.compile(this.scene, new PerspectiveCamera()))
       this.scene.remove(warm.group)
     }
     this.#gunnery = new Gunnery({
@@ -343,7 +347,7 @@ export class Game {
         this.#ocean = new OceanSurface(message.sea, { sky: this.#sky.cube, sun: sunColor, sunDirection, flashColor }, wakePeriod)
         this.scene.add(this.#ocean.mesh)
         const crest = message.sea.waves.reduce((sum, wave) => sum + wave.amplitude, 0)
-        const camera = this.#camera ?? new ChaseCamera(crest + cameraClearance)
+        const camera = this.#camera ?? new ChaseCamera(crest + cameraClearance, this.#galleon.guns)
         this.#camera = camera
         const own = message.ships.find((ship) => ship.id === message.shipId)
         if (own !== undefined) {
@@ -437,7 +441,8 @@ export class Game {
   #renderFrame(nowMs: number) {
     const started = performance.now()
     this.renderer.info.reset()
-    const dt = Number.isNaN(this.#lastFrameMs) ? 0 : Math.min(maxFrameSeconds, (nowMs - this.#lastFrameMs) / 1000)
+    // A rAF timestamp is the frame's start and can precede the last performance.now() frame `measure` drew: never step back.
+    const dt = Number.isNaN(this.#lastFrameMs) ? 0 : Math.max(0, Math.min(maxFrameSeconds, (nowMs - this.#lastFrameMs) / 1000))
     this.#lastFrameMs = nowMs
     const timeline = this.#timeline
     const camera = this.#camera
@@ -492,7 +497,9 @@ export class Game {
     if (own !== undefined) {
       const pose = own.view.pose
       // A foundering ship drags the camera no lower than the sea surface: the captain watches it go.
-      camera.follow(pose.x, pose.life === "afloat" ? pose.y : Math.max(pose.y, 0), pose.z, dt)
+      const manning = pose.life === "afloat" && this.#phase._tag !== "ended" ? own.view.group : undefined
+      camera.follow(pose.x, pose.life === "afloat" ? pose.y : Math.max(pose.y, 0), pose.z, dt, manning)
+      this.#lanterns.update(manning, camera.gunport)
       this.#sun.target.position.set(pose.x, 0, pose.z)
       this.#sun.position.copy(sunDirection).multiplyScalar(shadowReach).add(this.#sun.target.position)
       const forwardX = 1 - 2 * (pose.qy * pose.qy + pose.qz * pose.qz)
@@ -538,6 +545,7 @@ export class Game {
       const light = lights[i]
       if (light !== undefined) ocean.flashes[i]?.set(light.position.x, light.position.y, light.position.z, light.intensity)
     }
+    this.#lanterns.dimFlashes(this.effects.flashLights, camera.camera.position, camera.gunport)
     this.audio.update(dt, camera.camera, own?.view.pose, this.#wind.speed, this.#phase._tag)
     for (let i = 0; i < this.hooks.length; i++) this.hooks[i]?.(frame)
 

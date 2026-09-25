@@ -68,6 +68,12 @@ export interface DebugCamera {
   readonly pitch: number
   readonly distance: number
   readonly roll: number
+  /** How far into the gunport view the camera is, 0 chase … 1 at the port; and the side it looks out of. */
+  readonly gunport: number
+  readonly gunportSide: "port" | "starboard"
+  readonly fov: number
+  /** Elevation of the view's centre ray, radians. */
+  readonly lookPitch: number
 }
 
 /** Frame cost measured by rendering frames back to back, each waited on until the GPU is done (ms), plus what the frame drew. */
@@ -116,6 +122,8 @@ export interface BrickwakeDebug {
   orbit(yaw: number, pitch: number, distance?: number): void
   /** Test control: prints the own ship's sails with a team livery until its team changes, for livery screenshots. */
   paintOwn(livery: "pirate" | "navy-lion" | "navy-fleur"): void
+  /** Test control: holds or releases the gunport view as the right mouse does; `look` turns it as mouse pixels do. */
+  gunport(held: boolean, look?: readonly [number, number]): void
   /** Test control: renders `frames` frames of the live game back to back and times them. */
   measure(frames: number): FrameMeasure
   /** A drawn ship's damage: parts gone, sorted, and parts left on its meshes; null when the ship is not drawn. */
@@ -225,7 +233,17 @@ export const installDebugHook = (source: DebugSource): void => {
       if (chase === undefined) return null
       const { position } = chase.camera
       const right = new Vector3(1, 0, 0).applyQuaternion(chase.camera.quaternion)
-      return { position: [position.x, position.y, position.z], yaw: chase.yaw, pitch: chase.pitch, distance: chase.distance, roll: Math.asin(right.y) }
+      return {
+        position: [position.x, position.y, position.z],
+        yaw: chase.yaw,
+        pitch: chase.pitch,
+        distance: chase.distance,
+        roll: Math.asin(right.y),
+        gunport: chase.gunport.blend,
+        gunportSide: chase.gunport.side,
+        fov: chase.camera.fov,
+        lookPitch: Math.asin(new Vector3(0, 0, -1).applyQuaternion(chase.camera.quaternion).y),
+      }
     },
     helm: () => source.helm() ?? null,
     frames: () => source.stats().averages(),
@@ -250,6 +268,12 @@ export const installDebugHook = (source: DebugSource): void => {
       return wreck === undefined ? null : { gone: [...wreck.gone].sort((a, b) => a - b), drawnParts: wreck.drawnParts }
     },
     paintOwn: (name) => source.paintOwn(name === "pirate" ? pirateLivery : name === "navy-lion" ? navyLionLivery : navyFleurLivery),
+    gunport: (held, look) => {
+      const chase = source.camera()
+      if (chase === undefined) return
+      if (held !== chase.gunport.held) chase.holdGunport(held)
+      if (look !== undefined) chase.look(look[0], look[1])
+    },
     orbit: (yaw, pitch, distance) => {
       const chase = source.camera()
       if (chase === undefined) return
