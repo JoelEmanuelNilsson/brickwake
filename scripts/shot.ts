@@ -704,6 +704,80 @@ const gunport = async (browser: Browser, url: string) => {
   ].join("\n")
 }
 
+/**
+ * Plays 15's effects in a 12-ship line of battle at Joel's display size: frame times and debris cost over the opening
+ * exchange, then a broadside, hits on the own ship and its sinking as screenshots.
+ */
+const effects = async (browser: Browser, url: string) => {
+  const page = await browser.newPage({ viewport: { width: 1728, height: 1117 }, deviceScaleFactor: 2 })
+  await page.goto(`${url}?scenario=line-of-battle`)
+  await page.waitForFunction(() => window.brickwake?.joined === true && window.brickwake.ships().length >= 12, undefined, { timeout: 20_000 })
+  await page.mouse.click(864, 558)
+  await page.keyboard.press("KeyW")
+  await page.keyboard.press("KeyW")
+  await page.waitForTimeout(1500)
+  const own = await ownShip(page)
+  {
+    await page.evaluate((heading) => window.brickwake?.orbit(heading + Math.PI - 0.5, 0.08, 32), own.heading)
+    await page.waitForFunction(() => window.brickwake?.aim()?.reloadLeft === 0, undefined, { timeout: 8000 }).catch(() => undefined)
+    // Straight out to starboard, where the enemy line sails.
+    const outcome = await page.evaluate((p) => window.brickwake?.fireAt(p), [own.position[0] + Math.sin(own.heading) * 110, 1, own.position[2] + Math.cos(own.heading) * 110] as const)
+    check(outcome === "fired", `the own broadside fires (${outcome})`)
+    for (const [i, wait] of [150, 150, 300, 1400, 3000].entries()) {
+      await page.waitForTimeout(wait)
+      await page.screenshot({ path: `.shots/fx-broadside-${i + 1}.png` })
+    }
+  }
+
+  // Hits on the own ship, close up on its starboard side, the side the enemy line fires at.
+  await page.evaluate((heading) => window.brickwake?.orbit(heading - Math.PI / 2 - 0.35, 0.12, 26), (await ownShip(page)).heading)
+  let hits = 0
+  let gone = (await hook(page, (h) => h.wreck(h.shipId ?? "")?.gone.length)) ?? 0
+  const started = Date.now()
+  while (hits < 4 && Date.now() - started < 15_000) {
+    await page.waitForTimeout(60)
+    const now = (await hook(page, (h) => h.wreck(h.shipId ?? "")?.gone.length)) ?? 0
+    if (now > gone && (await ownShip(page)).life === "afloat") {
+      await page.waitForTimeout(120)
+      await page.screenshot({ path: `.shots/fx-hit-${++hits}.png` })
+    }
+    gone = now
+  }
+
+  // Watch the enemy line across the starboard beam while the fleets trade broadsides. A screenshot stalls the page
+  // for a frame or two: let the last one pass before counting.
+  await page.evaluate((heading) => window.brickwake?.orbit(heading - Math.PI / 2 + 0.5, 0.1, 40), (await ownShip(page)).heading)
+  await page.waitForTimeout(500)
+  await hook(page, (h) => h.frameSpread(true))
+  const debris: Array<ReturnType<BrickwakeDebug["effects"]>["debris"]> = []
+  for (let i = 0; i < 20; i++) {
+    await page.waitForTimeout(1000)
+    debris.push(await hook(page, (h) => h.effects().debris))
+  }
+  const spread = await hook(page, (h) => h.frameSpread(true))
+  const measures = []
+  for (let i = 0; i < 4; i++) measures.push(await hook(page, (h) => h.measure(60)))
+  const pipelined = measures.map((m) => m.pipelined).sort((a, b) => a - b)
+  const peak = debris.reduce((a, b) => (b.pieces > a.pieces ? b : a))
+
+  const sinking = await waitFor(page, (h) => h.ownShip()?.life === "sinking", 90_000)
+  if (sinking) {
+    await page.evaluate((heading) => window.brickwake?.orbit(heading - Math.PI / 2 - 0.6, 0.1, 42), (await ownShip(page)).heading)
+    for (const [i, wait] of [600, 900, 900, 900, 1000, 1500, 2000].entries()) {
+      await page.waitForTimeout(wait)
+      await page.screenshot({ path: `.shots/fx-sinking-${i + 1}.png` })
+    }
+  }
+  await page.close()
+  check(spread.interval.p99 <= 2 * spread.interval.p50 + 1, `no frame hitches in the exchange (interval p50 ${spread.interval.p50.toFixed(1)} ms, p99 ${spread.interval.p99.toFixed(1)} ms)`)
+  return [
+    `12-ship exchange, 20 s: ${spread.frames} frames; cpu p50 ${spread.cpu.p50.toFixed(2)} ms, p99 ${spread.cpu.p99.toFixed(2)} ms, max ${spread.cpu.max.toFixed(2)} ms; interval p50 ${spread.interval.p50.toFixed(2)} ms, p99 ${spread.interval.p99.toFixed(2)} ms, max ${spread.interval.max.toFixed(2)} ms, ${spread.hitches} over 2× median`,
+    `pipelined frame (${measures[0]?.width}×${measures[0]?.height}): median ${pipelined[1]?.toFixed(2)} ms, slowest ${pipelined[3]?.toFixed(2)} ms; waited on alone: worst ${Math.max(...measures.map((m) => m.worst)).toFixed(2)} ms`,
+    `debris at its peak: ${peak.bodies} bodies, ${peak.pieces} bricks, ${peak.studs} studs; update mean ${peak.meanMs.toFixed(3)} ms, worst ${Math.max(...debris.map((d) => d.worstMs)).toFixed(2)} ms`,
+    `own ship hit ${hits}×${sinking ? ", sank" : ", did not sink in time"}; saved .shots/fx-{broadside-1..5,hit-1..4,sinking-1..7}.png`,
+  ].join("\n")
+}
+
 const shipOrNull = (page: Page, id: string) => page.evaluate((id) => window.brickwake?.ships().find((s) => s.id === id) ?? null, id)
 
 const freePort = async () => {
@@ -739,7 +813,7 @@ Effect.gen(function* () {
     Effect.promise(() => chromium.launch({ args: ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist"] })),
     (browser) => Effect.promise(() => browser.close()),
   )
-  const checks = { c1: sail, c2: gunnery, c3: match, c4: bots, c5: scene, c6: wreck, c7: gunport, c8: tdm }
+  const checks = { c1: sail, c2: gunnery, c3: match, c4: bots, c5: scene, c6: wreck, c7: gunport, c8: tdm, fx: effects }
   const wanted = process.argv.slice(2)
   for (const [name, run] of Object.entries(checks)) {
     if (wanted.length > 0 && !wanted.includes(name)) continue

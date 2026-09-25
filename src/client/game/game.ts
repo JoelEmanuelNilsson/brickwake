@@ -1,9 +1,11 @@
 import { ACESFilmicToneMapping, Color, DirectionalLight, FogExp2, HemisphereLight, LinearSRGBColorSpace, PCFShadowMap, PerspectiveCamera, Scene, Vector2, Vector3, WebGLRenderer } from "three"
 import type { ScenarioName } from "../../sim/scenarios.ts"
 import type { ClientMessage, MatchPhaseSnapshot, ServerEvent, ServerMessage, WindSnapshot } from "../../protocol/messages.ts"
+import { ballVelocityAt } from "../../sim/gunnery.ts"
 import { ffaRules, type MatchMode } from "../../sim/rules.ts"
 import { tuning } from "../../sim/tuning.ts"
 import { GameAudio } from "../audio/game-audio.ts"
+import { BrickDebris } from "./brick-debris.ts"
 import { ChaseCamera } from "./chase-camera.ts"
 import { connect, type Connection } from "./connection.ts"
 import { Controls } from "./controls.ts"
@@ -119,6 +121,10 @@ export class Game {
   readonly #matchHud: MatchHud
   readonly #hitIndicator: HitIndicator
   readonly #sinking: SinkingShips
+  readonly #debris: BrickDebris
+  /** Hits that broke bricks this frame, thrown as debris once the ships are posed. */
+  readonly #strikes: Array<{ readonly hit: Extract<ServerEvent, { readonly _tag: "ballHit" }>; readonly detached: ReadonlyArray<number> }> = []
+  readonly #ballVelocity = new Vector3()
   #phase: MatchPhaseSnapshot = { _tag: "warmup", endsAt: 0 }
   readonly #matchReading: MatchReading
   /** All game sound; `audio.volume` is the persisted volume setting. */
@@ -213,13 +219,16 @@ export class Game {
     this.#galleon = loadGalleon()
     this.#wrecks = new Wrecks(this.#galleon.graph)
     this.#lanterns = new GunDeckLanterns(this.scene, this.#galleon)
+    this.#debris = new BrickDebris(this.scene, this.#galleon, this.effects, this.audio)
     for (let i = 0; i < tuning.match.maxShips; i++) this.#spareViews.push(new ShipView(`spare ${i}`, this.#galleon))
     // Compile every ship shader now, so the first ship in view costs no frame.
     const warm = this.#spareViews[0]
     if (warm !== undefined) {
       this.scene.add(warm.group)
+      const debris = this.#debris.warm()
       this.renderer.compile(this.scene, new PerspectiveCamera())
       this.#lanterns.compileLit(() => this.renderer.compile(this.scene, new PerspectiveCamera()))
+      debris.done()
       this.scene.remove(warm.group)
     }
     this.#gunnery = new Gunnery({
@@ -237,7 +246,8 @@ export class Game {
         return true
       },
     })
-    this.#sinking = new SinkingShips(this.effects, this.audio)
+    this.#sinking = new SinkingShips(this.effects, this.audio, this.#debris, this.#galleon)
+    this.#wrecks.onStrike = (hit, detached) => this.#strikes.push({ hit, detached })
     this.eventHandlers.push((event) => this.#gunnery.onEvent(event))
     this.eventHandlers.push((event) => this.#onMatchEvent(event))
     this.eventHandlers.push((event) => this.#wrecks.onEvent(event))
@@ -289,6 +299,7 @@ export class Game {
       sea: () => this.#ocean?.sea,
       gunnery: () => this.#gunnery,
       effects: () => this.effects,
+      debris: () => this.#debris,
       audio: () => this.audio,
       match: () => this.#matchReading,
       matchHud: () => this.#matchHud,
@@ -378,6 +389,7 @@ export class Game {
   #onMatchEvent(event: ServerEvent) {
     this.#matchHud.onEvent(event)
     if (event._tag === "shipRespawned" && event.shipId === this.#shipId) this.#controls?.syncSail(0)
+    if (event._tag === "sailHit") this.#ships.get(event.target)?.view.punchSail(...event.localPoint)
     if (event._tag !== "ballHit" || event.target !== this.#shipId) return
     const own = this.#ships.get(event.target)?.view.pose
     const shooter = this.#ships.get(event.shooter)?.view.pose
@@ -482,7 +494,7 @@ export class Game {
           entry.livery = { team: pose.team, name: print.name }
         }
         entry.view.update(pose, windX, windZ, dt, camera.camera, viewportHeight)
-        entry.view.group.visible = this.#sinking.update(id, pose, dt, renderTime, ocean.sea, camera)
+        entry.view.group.visible = this.#sinking.update(id, entry.view, dt, renderTime, ocean.sea, camera)
         if (pose.life === "afloat") {
           const forwardX = 1 - 2 * (pose.qy * pose.qy + pose.qz * pose.qz)
           const forwardZ = 2 * (pose.qx * pose.qz - pose.qw * pose.qy)
@@ -492,6 +504,13 @@ export class Game {
       }
     }
     this.#ships.forEach(this.#sweep)
+    for (const { hit, detached } of this.#strikes) {
+      const view = this.#ships.get(hit.target)?.view
+      const ball = this.#gunnery.balls.find(hit.ballId)
+      const velocity = ball === undefined ? undefined : this.#ballVelocity.copy(ballVelocityAt(ball, hit.time))
+      if (view !== undefined) this.#debris.shatter(view, hit.removed, detached, velocity)
+    }
+    this.#strikes.length = 0
 
     const own = this.#shipId === null ? undefined : this.#ships.get(this.#shipId)
     if (own !== undefined) {
@@ -540,6 +559,7 @@ export class Game {
     }
     this.#hitIndicator.update(dt, camera.yaw + Math.PI)
     this.effects.update(dt, renderTime, windX, windZ, ocean.sea, camera.camera)
+    this.#debris.update(dt, renderTime, ocean.sea, camera.camera.position, windX, windZ)
     const lights = this.effects.flashLights
     for (let i = 0; i < ocean.flashes.length; i++) {
       const light = lights[i]

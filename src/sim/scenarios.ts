@@ -1,4 +1,5 @@
-import { balanceBots, createMatch, type MatchState } from "./match.ts"
+import { drawBotSkill, type Bot } from "./bots.ts"
+import { balanceBots, createMatch, type MatchState, type ShipSpawn } from "./match.ts"
 import { ffaRules, tdmRules, type MatchRules } from "./rules.ts"
 import { seas, swell } from "./ocean.ts"
 import { shipId, type ShipId } from "./ship.ts"
@@ -45,6 +46,25 @@ const skirmish = balanceBots(
   }),
 )
 
+/** Two lines of six in the match sea, 110 m apart and 140 m between ships, sailing the same way: the player leads the port line, bots crew the rest. */
+const lineOfBattle = (() => {
+  const ships = Array.from({ length: 12 }, (_, i): ShipSpawn => ({
+    id: i === 0 ? scenarioShipId : shipId(`bot-${i}`),
+    x: (i % 6) * 140 - 350,
+    z: i < 6 ? -55 : 55,
+    heading: 0,
+    controls: { rudder: 0, sail: 1 },
+  }))
+  const state = createMatch({ seed: 8, sea: seas.open, wind: makeWind({ toward: -quarter, speed: 14, gustiness: 1 }), ships, rules: practice })
+  let rng = state.rng
+  const bots: Array<Bot> = ships.slice(1).map(({ id }) => {
+    const drawn = drawBotSkill(rng)
+    rng = drawn.rng
+    return { id, skill: drawn.skill, target: undefined }
+  })
+  return { ...state, rng, bots, botsJoined: bots.length }
+})()
+
 /**
  * Named start states, usable from tests and as `?scenario=<name>` in the browser. The ship heads +x,
  * sails furled, with the wind from port (blowing toward +z): a beam reach once sail is set.
@@ -72,6 +92,8 @@ export const scenarios = {
    */
   /** A full room: the player at the arena centre and bots on the spawn ring filling it to the most ships a room holds. */
   armada: balanceBots(createMatch({ seed: 7, sea: seas.open, wind: makeWind({ toward: -quarter, speed: 14, gustiness: 1 }), ships: solo, rules: practice }), tuning.match.maxShips),
+  /** Twelve ships in two lines trading broadsides at once: the effects' and debris' frame budget. */
+  "line-of-battle": lineOfBattle,
   duel: { ...duel, ships: duel.ships.map((ship) => (ship.id === duelShipIds[1] ? { ...ship, hp: duelBHp } : ship)) },
   /**
    * TDM to one sink: the player (pirates) with a navy ship 150 m off the starboard beam at 15 HP, bots filling both sides

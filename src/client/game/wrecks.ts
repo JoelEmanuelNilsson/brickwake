@@ -8,6 +8,8 @@ export interface Wreck {
   readonly gone: Array<number>
 }
 
+type BallHit = Extract<ServerEvent, { readonly _tag: "ballHit" }>
+
 type WelcomeWrecks = Extract<ServerMessage, { readonly _tag: "welcome" }>["wrecks"]
 
 /**
@@ -17,6 +19,8 @@ type WelcomeWrecks = Extract<ServerMessage, { readonly _tag: "welcome" }>["wreck
 export class Wrecks {
   readonly #graph: DamageGraph
   readonly #byShip = new Map<string, Wreck>()
+  /** Called on each live hit that broke bricks, with the parts that fell with the removed ones. */
+  onStrike: (hit: BallHit, detached: ReadonlyArray<number>) => void = () => undefined
 
   constructor(graph: DamageGraph) {
     this.#graph = graph
@@ -32,7 +36,7 @@ export class Wrecks {
   onEvent(event: ServerEvent): void {
     switch (event._tag) {
       case "ballHit":
-        if (event.removed.length > 0) this.#strike(event.target, event.removed)
+        if (event.removed.length > 0) this.onStrike(event, this.#strike(event.target, event.removed))
         return
       case "shipRespawned":
       case "shipRepaired":
@@ -55,5 +59,6 @@ export class Wrecks {
     }
     const detached = wreck.damage.apply(removed)
     wreck.gone.push(...removed, ...detached)
+    return detached
   }
 }

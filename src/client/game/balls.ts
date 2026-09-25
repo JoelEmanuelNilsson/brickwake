@@ -61,6 +61,12 @@ export class Cannonballs {
     else if (event._tag === "ballHit" || event._tag === "ballSplash") this.#end(event)
   }
 
+  /** The ball `id` while it is known (fired and not yet ended at the render time). */
+  find(id: number): Cannonball | undefined {
+    for (let i = 0; i < this.#count; i++) if (this.#flights[i]?.ball?.id === id) return this.#flights[i]?.ball
+    return undefined
+  }
+
   #add(event: CannonFired) {
     if (this.#count >= capacity) return
     const flight = this.#flights[this.#count++]
