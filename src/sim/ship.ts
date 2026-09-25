@@ -97,6 +97,8 @@ export interface ShipState {
   readonly damage: number
   /** The ship's side in TDM; undefined in FFA, where every ship fights for itself. Kept across respawns. */
   readonly team: Team | undefined
+  /** The last enemy whose ball took HP from this ship since it spawned, and when; a capsize within `tuning.sinking.capsizeCreditSeconds` credits it. */
+  readonly lastHitBy: { readonly shipId: ShipId; readonly time: number } | undefined
 }
 
 /** Heading, pitch and heel of a ship, in radians. */
@@ -149,6 +151,7 @@ export const makeShip = (
   hits: 0,
   damage: 0,
   team: options.team,
+  lastHitBy: undefined,
 })
 
 /** Share of a buoyancy column at ship-local `x` still afloat at `time`: the flooding end loses it first, the far end last. */

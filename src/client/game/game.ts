@@ -1,7 +1,8 @@
-import { ACESFilmicToneMapping, Color, DirectionalLight, FogExp2, HemisphereLight, LinearSRGBColorSpace, PCFShadowMap, PerspectiveCamera, Scene, Vector2, Vector3, WebGLRenderer } from "three"
+import { ACESFilmicToneMapping, Color, DirectionalLight, FogExp2, HemisphereLight, LinearSRGBColorSpace, PCFShadowMap, PerspectiveCamera, Quaternion, Scene, Vector2, Vector3, WebGLRenderer } from "three"
 import type { ScenarioName } from "../../sim/scenarios.ts"
 import type { ClientMessage, MatchPhaseSnapshot, ServerEvent, ServerMessage, WindSnapshot } from "../../protocol/messages.ts"
-import { ballVelocityAt } from "../../sim/gunnery.ts"
+import { ballVelocityAt, segmentBoxEntry } from "../../sim/gunnery.ts"
+import { galleonClass, shipWreck } from "../../sim/wreck.ts"
 import { ffaRules, type MatchMode } from "../../sim/rules.ts"
 import { tuning } from "../../sim/tuning.ts"
 import { GameAudio } from "../audio/game-audio.ts"
@@ -9,11 +10,14 @@ import { BrickDebris } from "./brick-debris.ts"
 import { ChaseCamera } from "./chase-camera.ts"
 import { connect, type Connection } from "./connection.ts"
 import { Controls } from "./controls.ts"
+import { ControlsHint, type HintReading } from "./controls-hint.ts"
+import { Menus } from "./menus.ts"
+import { type GameSettings, type Graphics, type GraphicsQuality, saveSettings } from "./settings.ts"
 import { type FrameMeasure, installDebugHook } from "./debug-hook.ts"
 import { Effects } from "./effects.ts"
 import { type GalleonModel, loadGalleon } from "./galleon.ts"
 import { FrameStats } from "./frame-stats.ts"
-import { Gunnery } from "./gunnery.ts"
+import { Gunnery, type HullAlong } from "./gunnery.ts"
 import { GunDeckLanterns } from "./gunport-view.ts"
 import { HitIndicator } from "./hit-indicator.ts"
 import { Hud, type HudReading } from "./hud.ts"
@@ -55,6 +59,10 @@ export interface GameElements {
   readonly match: HTMLElement
   /** Hit-direction arcs around the reticle. */
   readonly hits: HTMLElement
+  /** Esc menu, settings panel and the first-run controls hint. */
+  readonly pause: HTMLElement
+  readonly settings: HTMLElement
+  readonly hint: HTMLElement
 }
 
 /** Where the title screen remembers the last quick-play mode chosen. */
@@ -78,6 +86,8 @@ const shadowHalfWidth = 45
 /** How far up-sun the shadow camera stands, metres; the low sun's shadow box runs twice this deep. */
 const shadowReach = 150
 const maxFrameSeconds = 0.1
+/** The parts of a ship no ball has struck yet. */
+const intact = shipWreck([])
 
 /** How far above the highest possible crest the camera stays, metres. */
 const cameraClearance = 1.5
@@ -126,6 +136,25 @@ export class Game {
   /** Hits that broke bricks this frame, thrown as debris once the ships are posed. */
   readonly #strikes: Array<{ readonly hit: Extract<ServerEvent, { readonly _tag: "ballHit" }>; readonly detached: ReadonlyArray<number> }> = []
   readonly #ballVelocity = new Vector3()
+  readonly #hullRay = { origin: new Vector3(), direction: new Vector3(), end: new Vector3(), turn: new Quaternion() }
+  /** The aim ray against every other afloat ship's remaining parts, as the sim's balls meet them. */
+  readonly #hullAlong: HullAlong = (origin, direction, reach) => {
+    const { min, max } = galleonClass()
+    const ray = this.#hullRay
+    let nearest: number | undefined
+    for (const [id, entry] of this.#ships) {
+      const pose = entry.view.pose
+      if (id === this.#shipId || pose.life !== "afloat" || !entry.view.group.visible) continue
+      ray.turn.set(pose.qx, pose.qy, pose.qz, pose.qw).invert()
+      ray.origin.set(origin.x - pose.x, origin.y - pose.y, origin.z - pose.z).applyQuaternion(ray.turn)
+      ray.direction.copy(direction).applyQuaternion(ray.turn)
+      ray.end.copy(ray.direction).multiplyScalar(nearest ?? reach).add(ray.origin)
+      if (segmentBoxEntry(ray.origin, ray.end, min, max) === undefined) continue
+      const along = (this.#wrecks.of(id)?.damage ?? intact).firstPartAlong(ray.origin, ray.direction, nearest ?? reach)
+      if (along !== undefined) nearest = along
+    }
+    return nearest
+  }
   #phase: MatchPhaseSnapshot = { _tag: "warmup", endsAt: 0 }
   readonly #matchReading: MatchReading
   /** All game sound; `audio.volume` is the persisted volume setting. */
@@ -139,8 +168,17 @@ export class Game {
   #shipId: string | null = null
   #wind: WindSnapshot = { toward: 0, speed: 0 }
   #sailing = false
+  /** Esc menu up: this view takes no input while the server's match sails on. */
+  #paused = false
+  #pointerLocked = false
+  #settings: GameSettings
+  #graphics: Graphics
+  readonly #graphicsFor: (quality: GraphicsQuality) => Graphics
+  readonly #menus: Menus
+  readonly #hint: ControlsHint
   #frameCount = 0
   #lastFrameMs = Number.NaN
+  readonly #hintReading: HintReading = { sailing: false, paused: false, sailLevel: 0, rudder: 0, canFire: false, gunport: false }
   readonly #reading: HudReading = { speed: 0, sailLevel: 0, sailSet: 0, rudderAngle: 0, heading: 0, windToward: 0, windSpeed: 0, viewYaw: 0 }
 
   readonly canvas: HTMLCanvasElement
@@ -157,14 +195,16 @@ export class Game {
       readonly room: string | undefined
       /** Quick-play mode to join at load; the title screen can switch it. Scenario rooms bring their own rules. */
       readonly mode: MatchMode
-      readonly pixelRatio: number
       readonly orbit: number
-      /** MSAA samples of the scene target. */
-      readonly samples: number
-      readonly bloom: boolean
-      readonly shadows: boolean
+      readonly settings: GameSettings
+      /** How each graphics quality renders on this device and page. */
+      readonly graphics: (quality: GraphicsQuality) => Graphics
     },
   ) {
+    this.#settings = options.settings
+    this.#graphicsFor = options.graphics
+    this.#graphics = options.graphics(options.settings.quality)
+    const graphics = this.#graphics
     this.canvas = canvas
     this.elements = elements
     this.#orbit = options.orbit
@@ -172,13 +212,13 @@ export class Game {
     this.#scenario = options.scenario
     elements.overlay.dataset.mode = options.scenario === undefined ? options.mode : "scenario"
     this.renderer = new WebGLRenderer({ canvas, antialias: false, powerPreference: "high-performance" })
-    this.renderer.setPixelRatio(options.pixelRatio)
+    this.renderer.setPixelRatio(graphics.pixelRatio)
     this.renderer.toneMapping = ACESFilmicToneMapping
     this.renderer.toneMappingExposure = 0.5
     // The frame renders several passes; counters reset once per frame so they count all of them.
     this.renderer.info.autoReset = false
-    this.#pipeline = new RenderPipeline(this.renderer, this.scene, options.samples)
-    this.#pipeline.bloom = options.bloom
+    this.#pipeline = new RenderPipeline(this.renderer, this.scene, graphics.samples)
+    this.#pipeline.bloom = graphics.bloom
     this.#stats = new FrameStats(this.renderer)
     this.#hud = new Hud(elements.hud)
     this.#matchHud = new MatchHud(elements.match)
@@ -202,9 +242,9 @@ export class Game {
     this.scene.environmentIntensity = 0.4
     const sun = this.#sun
     sun.position.copy(sunDirection).multiplyScalar(shadowReach)
-    this.renderer.shadowMap.enabled = options.shadows
+    this.renderer.shadowMap.enabled = graphics.shadows
     this.renderer.shadowMap.type = PCFShadowMap
-    sun.castShadow = options.shadows
+    sun.castShadow = graphics.shadows
     sun.shadow.mapSize.set(2048, 2048)
     const box = sun.shadow.camera
     box.left = -shadowHalfWidth
@@ -246,6 +286,7 @@ export class Game {
         view.muzzle(ball.gun, muzzle)
         return true
       },
+      hullAlong: this.#hullAlong,
     })
     this.#sinking = new SinkingShips(this.effects, this.audio, this.#debris, this.#galleon)
     this.#wrecks.onStrike = (hit, detached) => this.#strikes.push({ hit, detached })
@@ -253,15 +294,36 @@ export class Game {
     this.eventHandlers.push((event) => this.#onMatchEvent(event))
     this.eventHandlers.push((event) => this.#wrecks.onEvent(event))
 
+    this.audio.volume = this.#settings.volume
+    this.audio.ambienceVolume = this.#settings.ambience
+    this.#menus = new Menus({ pause: elements.pause, settings: elements.settings, controlsStrip: elements.overlay.querySelector(".menu-keys") }, this.#settings, {
+      apply: (settings) => this.#applySettings(settings),
+      resume: () => this.#resume(),
+      title: () => this.#showTitle(),
+    })
+    this.#hint = new ControlsHint(elements.hint, options.scenario === undefined)
+
     window.addEventListener("resize", () => this.#resize())
     elements.overlay.addEventListener("click", (event) => {
-      const choice = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-mode]")?.dataset.mode : undefined
+      const target = event.target instanceof Element ? event.target : undefined
+      if (target?.closest("[data-action=settings]")) return this.#menus.openSettings()
+      const choice = target?.closest<HTMLElement>("[data-mode]")?.dataset.mode
       if (choice === "ffa" || choice === "tdm") this.#chooseMode(choice)
       this.#setSail()
     })
     canvas.addEventListener("click", () => this.#lockPointer())
     document.addEventListener("pointerlockchange", () => {
-      this.elements.status.dataset.pointer = document.pointerLockElement === canvas ? "locked" : "free"
+      const locked = document.pointerLockElement === canvas
+      this.elements.status.dataset.pointer = locked ? "locked" : "free"
+      // The browser's own Esc ends the lock without a keydown reaching the page: losing the lock is the pause.
+      if (this.#pointerLocked && !locked && this.#sailing) this.#pause()
+      this.#pointerLocked = locked
+    })
+    window.addEventListener("keydown", (event) => {
+      if (event.code !== "Escape" || event.repeat) return
+      if (this.#menus.shown.settings) this.#menus.closeSettings()
+      else if (this.#paused) this.#resume()
+      else if (this.#sailing) this.#pause()
     })
 
     this.#connection = connect({
@@ -305,6 +367,17 @@ export class Game {
       match: () => this.#matchReading,
       matchHud: () => this.#matchHud,
       measure: (frames) => this.#measure(frames),
+      ui: () => ({
+        paused: this.#paused,
+        settingsOpen: this.#menus.shown.settings,
+        hint: this.#hint.showing ?? null,
+        settings: this.#settings,
+        graphics: this.#graphics,
+        cameraSensitivity: this.#camera?.sensitivity ?? null,
+        volume: this.audio.volume,
+        ambience: this.audio.ambienceVolume,
+        audioPaused: this.audio.paused,
+      }),
       wreck: (id) => {
         const view = this.#ships.get(id)?.view
         return view === undefined ? undefined : { gone: this.#wrecks.of(id)?.gone ?? [], drawnParts: view.partCount }
@@ -331,10 +404,55 @@ export class Game {
 
   #setSail() {
     this.#sailing = true
-    //this.audio.start()
+    this.audio.start()
     this.elements.overlay.hidden = true
-    if (this.#controls !== undefined) this.#controls.active = true
+    this.#resume()
+  }
+
+  #pause() {
+    if (this.#paused) return
+    this.#paused = true
+    this.#menus.paused = true
+    this.audio.paused = true
+    if (this.#controls !== undefined) {
+      this.#controls.release()
+      this.#controls.active = false
+    }
+    if (document.pointerLockElement === this.canvas) document.exitPointerLock()
+  }
+
+  #resume() {
+    this.#paused = false
+    this.#menus.paused = false
+    this.audio.paused = false
+    if (this.#controls !== undefined) this.#controls.active = this.#sailing
     this.#lockPointer()
+  }
+
+  /** From the pause menu back to the title screen, to change battle or set sail again; the ship stays in the match. */
+  #showTitle() {
+    this.#paused = false
+    this.#menus.paused = false
+    this.#sailing = false
+    this.elements.overlay.hidden = false
+  }
+
+  #applySettings(settings: GameSettings) {
+    const quality = settings.quality !== this.#settings.quality
+    this.#settings = settings
+    saveSettings(settings)
+    if (this.#camera !== undefined) this.#camera.sensitivity = settings.sensitivity
+    this.audio.volume = settings.volume
+    this.audio.ambienceVolume = settings.ambience
+    if (!quality) return
+    const graphics = this.#graphicsFor(settings.quality)
+    this.#graphics = graphics
+    this.renderer.setPixelRatio(graphics.pixelRatio)
+    this.#pipeline.samples = graphics.samples
+    this.#pipeline.bloom = graphics.bloom
+    this.renderer.shadowMap.enabled = graphics.shadows
+    this.#sun.castShadow = graphics.shadows
+    this.#resize()
   }
 
   #lockPointer() {
@@ -361,13 +479,16 @@ export class Game {
         const crest = message.sea.waves.reduce((sum, wave) => sum + wave.amplitude, 0)
         const camera = this.#camera ?? new ChaseCamera(crest + cameraClearance, this.#galleon.guns)
         this.#camera = camera
+        camera.sensitivity = this.#settings.sensitivity
         const own = message.ships.find((ship) => ship.id === message.shipId)
         if (own !== undefined) {
           const [x, y, z, w] = own.orientation
           camera.placeBehind(Math.atan2(-2 * (x * z - w * y), 1 - 2 * (y * y + z * z)) + this.#orbit)
         }
-        this.#controls ??= new Controls(this.canvas, camera, (m) => this.#connection.send(m), () => this.#gunnery.fire())
-        this.#controls.active = this.#sailing
+        this.#controls ??= new Controls(this.canvas, camera, (m) => this.#connection.send(m), () => {
+          if (this.#gunnery.fire() === "fired") this.#hint.done("fire")
+        })
+        this.#controls.active = this.#sailing && !this.#paused
         if (own !== undefined) this.#controls.syncSail(own.sail)
         this.#resize()
         this.#status("joined")
@@ -536,6 +657,14 @@ export class Game {
       reading.viewYaw = camera.yaw + Math.PI
       this.#hud.update(reading)
       this.elements.hud.hidden = !this.#sailing
+      const hint = this.#hintReading
+      hint.sailing = this.#sailing && pose.life === "afloat"
+      hint.paused = this.#paused
+      hint.sailLevel = pose.sail
+      hint.rudder = pose.rudder
+      hint.canFire = this.#gunnery.canFire
+      hint.gunport = camera.gunport.held
+      this.#hint.update(dt, hint)
     }
     this.#wake.render(this.renderer, dt)
     ocean.update(renderTime, camera.camera.position.x, camera.camera.position.z, this.#wake.texture)

@@ -129,6 +129,7 @@ Sink ships to score. Sunk ships respawn.
 - Right mouse (held): gunport aim view — camera at the gunport on the facing side,
   zoomed, cannon barrel in frame (like `ref-04`/`ref-05`).
 - `Tab`: scoreboard.
+- `Esc`: pause menu (this view only; the server match goes on) with settings.
 
 ## Starting tuning numbers (all tunable constants in one module)
 
@@ -145,9 +146,9 @@ Sink ships to score. Sunk ships respawn.
 | Elevation / traverse | −4° … +12° / ±25° from perpendicular |
 | Per-gun spread | ±1° traverse, ±0.25° elevation, from the match's seeded RNG: a round patch about the reticle (±4 m across, ±6 m along at 220 m) |
 | Damage | per ball: hull 5, upper works 2, sails 1; hull 100 HP (~22 hits to sink, ~28 in a melee) |
-| Sinking / respawn | 4 s sinking (not hittable, no control), respawn 5 s later; a ship heeled or pitched past 75° capsizes and founders (no one credited) |
+| Sinking / respawn | 4 s sinking (not hittable, no control), respawn 5 s later; a ship heeled or pitched past 75° capsizes and founders, credited to the last enemy that took its HP within 20 s |
 | FFA | first to 8 sinks or 8 min (6 bots: 2.5 sinks/min, top captain 4–8) |
-| TDM | Pirates vs Navy, first to 15 sinks or 10 min |
+| TDM | Pirates vs Navy, first to 15 sinks or 10 min; a ship respawning on a side two ships larger crosses over |
 | Room | 12 ships max; bots fill up to 6 ships and leave as humans join |
 | Bot aim | per-broadside aim error 10–20 % of range: bots hit ~40 %, a careful human (~55 %) wins ~80 % of duels, a median duel lasts ~70 s |
 | Sea-keeping | sails lose force as cos²(heel); heave/pitch damping pays for itself in forward speed (added resistance in waves): into the open-sea swell at full sail 10.4 m/s, pitch ±6.6°, 0.46 g peak |

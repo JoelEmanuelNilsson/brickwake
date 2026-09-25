@@ -108,3 +108,22 @@ test("TDM win: a headless Pirates-vs-Navy bot match ends with the side that firs
   for (const team of ["pirates", "navy"] as const)
     expect(state.ships.filter((ship) => ship.team === team).reduce((sum, ship) => sum + ship.kills, 0)).toBe(state.teamSinks[team])
 }, 60_000)
+
+test("with no bots to even the sides, a ship respawning on a side two ships larger crosses to the other", () => {
+  const empty = createMatch({ seed: 4, rules: { ...tdmRules, warmupSeconds: 0 }, sea: seas.calm, wind, ships: [] })
+  let state = empty
+  for (let human = 1; human <= 8; human++) state = addShip(state, spawnPoint(state, shipId(`ship-${human}`)))
+  expect(sides(state)).toEqual({ pirates: 4, navy: 4 })
+  const navy = state.ships.filter((ship) => ship.team === "navy").map((ship) => ship.id)
+  state = removeShip(removeShip(state, navy[0]!), navy[1]!)
+  expect(sides(state)).toEqual({ pirates: 4, navy: 2 })
+  const pirate = state.ships.find((ship) => ship.team === "pirates")!
+  const time = state.tick / SIM_HZ
+  state = { ...state, ships: state.ships.map((ship) => (ship.id === pirate.id ? { ...ship, life: { _tag: "sunk", respawnAt: time } } : ship)) }
+  const respawned = stepMatch(state, new Map()).state
+  expect(shipOf(respawned, pirate.id).team).toBe("navy")
+  expect(sides(respawned)).toEqual({ pirates: 3, navy: 3 })
+  expect(shipOf(respawned, pirate.id).position.z).toBeLessThan(1e-6)
+  const again = stepMatch({ ...respawned, ships: respawned.ships.map((ship) => (ship.id === pirate.id ? { ...ship, life: { _tag: "sunk", respawnAt: time } } : ship)) }, new Map()).state
+  expect(shipOf(again, pirate.id).team).toBe("navy")
+})

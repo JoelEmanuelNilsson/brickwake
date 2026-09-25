@@ -182,6 +182,8 @@ export const tuning = {
     seconds: 4,
     /** Heel or pitch past which a ship capsizes and founders, radians. */
     capsizeHeel: 75 * degrees,
+    /** A capsize this soon after an enemy ball took HP is that enemy's sink, seconds: the broadside that knocked the ship down wins it. */
+    capsizeCreditSeconds: 20,
     /** Seconds a sunk ship waits before it respawns. */
     respawnSeconds: 5,
     /** Seconds one buoyancy column takes to flood, and how much later the far end starts than the flooding end. */

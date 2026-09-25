@@ -14,7 +14,8 @@ import { dummyShipId, scenarios, scenarioShipId } from "./scenarios.ts"
 import { hitDamage } from "./ship/damage.ts"
 import { shipAttitude, shipId, type ShipState } from "./ship.ts"
 import { SIM_DT, SIM_HZ, tuning } from "./tuning.ts"
-import { add, length, quatFromAxisAngle, scale, sub, vec3, type Vec3 } from "./vector.ts"
+import { add, length, quatFromAxisAngle, rotate, rotateInverse, scale, sub, vec3, type Vec3 } from "./vector.ts"
+import { shipWreck } from "./wreck.ts"
 
 const degrees = Math.PI / 180
 
@@ -217,4 +218,26 @@ test("a broadside rocks the ship: recoil heels it away from the target", () => {
   expect(rock).toBeLessThan(-0.6 * degrees)
   expect(rock).toBeGreaterThan(-3 * degrees)
   expect(Math.max(...fired.heels)).toBeGreaterThan(0.1 * degrees)
+})
+
+test("a broadside aimed at a point on a hull strikes the hull about that point", () => {
+  const start = scenarios["target-dummy"]
+  const dummy = start.ships.find((ship) => ship.id === dummyShipId)!
+  const own = start.ships.find((ship) => ship.id === scenarioShipId)!
+  // The client's reticle meets the hull where the eye's ray first strikes a part: do the same from above our deck.
+  const eye = add(own.position, vec3(0, 8, 0))
+  const toward = sub(add(dummy.position, vec3(0, 3, 0)), eye)
+  const local = (world: Vec3) => rotateInverse(dummy.orientation, sub(world, dummy.position))
+  const direction = rotateInverse(dummy.orientation, scale(toward, 1 / length(toward)))
+  const along = shipWreck([]).firstPartAlong(local(eye), direction, length(toward) * 2)!
+  const aimLocal = add(local(eye), scale(direction, along))
+  const aimPoint = add(dummy.position, rotate(dummy.orientation, aimLocal))
+  expect(aimPoint.y).toBeGreaterThan(1.5)
+  const { events } = run(start, 5, [[0, { side: "starboard", aimPoint }]])
+  const hits = eventsOf(events, "ballHit")
+  expect(hits.length).toBeGreaterThanOrEqual(10)
+  const meanHeight = hits.reduce((sum, hit) => sum + hit.localPoint.y, 0) / hits.length
+  const meanAlong = hits.reduce((sum, hit) => sum + hit.localPoint.x, 0) / hits.length
+  expect(Math.abs(meanHeight - aimLocal.y)).toBeLessThan(1)
+  expect(Math.abs(meanAlong - aimLocal.x)).toBeLessThan(3)
 })

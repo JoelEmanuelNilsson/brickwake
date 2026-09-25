@@ -96,6 +96,8 @@ const feedSeconds = 7
 const feedLines = 5
 /** Seconds the "battle begins" banner holds after warmup. */
 const startBannerSeconds = 2.2
+/** Seconds the banner tells a captain the sides were evened and they changed sides. */
+const sideBannerSeconds = 4
 /** Scoreboard rebuilds per second while it shows. */
 const boardHz = 4
 
@@ -150,6 +152,8 @@ export class MatchHud {
   readonly #teamOf = new Map<string, Team | null>()
   #sunkBy = new Map<string, string | null>()
   #playingSince = Number.NaN
+  #ownTeam: ShipPose["team"] | undefined
+  #sideChangedAt = Number.NaN
   #lastPhase: MatchPhaseSnapshot["_tag"] | undefined
 
   constructor(root: HTMLElement) {
@@ -290,18 +294,25 @@ export class MatchHud {
     let title = ""
     let sub = ""
     let tone = "info"
+    const team = own?.team
+    if (team !== undefined && team !== this.#ownTeam) {
+      if (this.#ownTeam !== undefined && this.#ownTeam !== null && team !== null) this.#sideChangedAt = renderTime
+      this.#ownTeam = team
+    }
     if (own !== undefined && own.life !== "afloat" && phase._tag !== "ended") {
       const respawnAt = own.life === "sinking" ? own.lifeTime + tuning.sinking.seconds + tuning.sinking.respawnSeconds : own.lifeTime
       const by = this.#sunkBy.get(reading.ownId)
       title = own.life === "sinking" ? "Your ship is going down" : "Sunk"
       sub = `${by ? `Sunk by ${shipName(by)} · ` : ""}Back on the water in ${Math.max(0, Math.ceil(respawnAt - renderTime))}`
       tone = "danger"
+    } else if (team && renderTime - this.#sideChangedAt < sideBannerSeconds) {
+      title = "Sides evened"
+      sub = `You now sail with the ${teamNames[team]}`
     } else if (phase._tag === "warmup" && phase.endsAt - renderTime <= 5) {
       title = "Clear for action"
       sub = `Battle begins in ${Math.max(1, Math.ceil(phase.endsAt - renderTime))}`
     } else if (phase._tag === "playing" && renderTime - this.#playingSince < startBannerSeconds) {
       title = "Battle begins"
-      const team = own?.team
       sub = team ? `Sail with the ${teamNames[team]} · first side to ${reading.rules.scoreLimit} sinks` : `First to ${reading.rules.scoreLimit} sinks`
     }
     this.#banner.hidden = title === ""

@@ -46,8 +46,15 @@ export class RenderPipeline {
   readonly #composite = new FullScreenQuad(compositeMaterial())
   readonly #bloom: UnrealBloomPass
   readonly #output = new OutputPass()
-  /** Whether bloom runs; off only to measure its cost. */
+  /** Whether bloom runs (the graphics setting, and cost measurements). */
   bloom = true
+
+  /** Sets the scene target's MSAA sample count (0 for none); a change reallocates it on the next render. */
+  set samples(count: number) {
+    if (count === this.#sceneTarget.samples) return
+    this.#sceneTarget.samples = count
+    this.#sceneTarget.dispose()
+  }
 
   /** `samples` is the MSAA sample count of the scene target (0 for none). */
   constructor(renderer: WebGLRenderer, scene: Scene, samples: number) {

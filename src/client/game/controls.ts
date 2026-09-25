@@ -22,9 +22,11 @@ export class Controls {
   #starboard = false
   active = false
   readonly #send: (message: ClientMessage) => void
+  readonly #camera: ChaseCamera
 
   constructor(element: HTMLElement, camera: ChaseCamera, send: (message: ClientMessage) => void, fire: () => void) {
     this.#send = send
+    this.#camera = camera
     window.addEventListener("keydown", (event) => {
       if (!this.active) return
       switch (event.code) {
@@ -54,12 +56,7 @@ export class Controls {
       this.#steer()
     })
     // A key released while the window lost focus never sends keyup; centre the rudder instead of leaving it hard over.
-    window.addEventListener("blur", () => {
-      this.#port = false
-      this.#starboard = false
-      this.#steer()
-      camera.holdGunport(false)
-    })
+    window.addEventListener("blur", () => this.release())
     element.addEventListener("mousemove", (event) => {
       if (document.pointerLockElement === element) camera.look(event.movementX, event.movementY)
     })
@@ -78,6 +75,14 @@ export class Controls {
   /** The helm last asked for. */
   get helm(): HelmRequest {
     return { rudder: this.#rudder, sail: this.#sail }
+  }
+
+  /** Lets go of every held input: the rudder centres and the gunport view ends. Sail stays as set. */
+  release(): void {
+    this.#port = false
+    this.#starboard = false
+    this.#steer()
+    this.#camera.holdGunport(false)
   }
 
   /** Adopts the ship's sail level from the server, for a fresh join. */

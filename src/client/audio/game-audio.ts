@@ -17,8 +17,9 @@ const ambienceGlideSeconds = 0.4
 /** Balls passing closer than this to the listener whistle, metres. */
 const whistleRange = 35
 const ambienceBusGain = 0.55
-const volumeKey = "brickwake.volume"
 const defaultVolume = 0.8
+/** Share of the master gain left while the pause menu is up: the battle goes on, heard from further off. */
+const pausedShare = 0.3
 
 /**
  * Loudness of each sound at the source (`level`, before the master) and the distance at which it has fallen to half
@@ -104,6 +105,7 @@ export class GameAudio {
   readonly #whistled: Array<number> = Array.from({ length: 64 }, () => -1)
   #whistledNext = 0
   #volume = defaultVolume
+  #paused = false
   #ambienceVolume = 1
   #lx = 0
   #ly = 0
@@ -124,7 +126,6 @@ export class GameAudio {
 
   /** `context` (an OfflineAudioContext, for analysis) is used as given and needs no `start()`. */
   constructor(options: { readonly context?: BaseAudioContext; readonly ambienceVolume?: number } = {}) {
-    this.#volume = readStoredVolume()
     this.#ambienceVolume = options.ambienceVolume ?? 1
     this.ready = new Promise((resolve) => {
       this.#markReady = resolve
@@ -164,25 +165,38 @@ export class GameAudio {
     // A device at another rate gets its own render rather than resampled buffers.
     if (context.sampleRate !== likelySampleRate) this.#bank = renderInWorker(context.sampleRate)
     void this.#bank.then((bank) => {
-      this.#graph = buildSoundGraph(context, bank, this.#volume ** 2, ambienceBusGain * this.#ambienceVolume)
+      this.#graph = buildSoundGraph(context, bank, this.#masterGain(), ambienceBusGain * this.#ambienceVolume)
       this.#markReady()
     })
   }
 
-  /** Master volume 0–1 (perceptual: the gain is its square); kept across visits. */
+  /** Master volume 0–1 (perceptual: the gain is its square). */
   get volume(): number {
     return this.#volume
   }
 
   set volume(value: number) {
     this.#volume = Math.min(1, Math.max(0, value))
+    this.#applyMaster(0.02)
+  }
+
+  /** True while the game is paused: the mix drops to `pausedShare` of the master. */
+  get paused(): boolean {
+    return this.#paused
+  }
+
+  set paused(value: boolean) {
+    this.#paused = value
+    this.#applyMaster(0.15)
+  }
+
+  #masterGain() {
+    return this.#volume ** 2 * (this.#paused ? pausedShare : 1)
+  }
+
+  #applyMaster(glideSeconds: number) {
     const graph = this.#graph
-    graph?.master.gain.setTargetAtTime(this.#volume ** 2, graph.context.currentTime, 0.02)
-    try {
-      localStorage.setItem(volumeKey, String(this.#volume))
-    } catch {
-      // Storage can be disabled (private mode); the volume still applies for this visit.
-    }
+    graph?.master.gain.setTargetAtTime(this.#masterGain(), graph.context.currentTime, glideSeconds)
   }
 
   /** Ambience (sea, wind, rigging, wash, canvas) volume 0–1 relative to the effects. */
@@ -504,15 +518,6 @@ const renderInWorker = (sampleRate: number) =>
     })
     worker.postMessage(sampleRate)
   })
-
-const readStoredVolume = () => {
-  try {
-    const stored = Number(localStorage.getItem(volumeKey) ?? Number.NaN)
-    return Number.isFinite(stored) ? Math.min(1, Math.max(0, stored)) : defaultVolume
-  } catch {
-    return defaultVolume
-  }
-}
 
 /** Identity to ±0.8, then a tanh knee to ±0.98: a last guard behind the limiter so an overshoot bends instead of clipping. */
 const softClipCurve = () => {

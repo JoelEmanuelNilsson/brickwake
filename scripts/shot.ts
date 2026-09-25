@@ -105,7 +105,7 @@ const shipById = async (page: Page, id: string) => {
 /** Yaw angle of the direction from `a` to `b` (see `directionFromAngle`). */
 const bearing = (a: readonly [number, number, number], b: readonly [number, number, number]) => Math.atan2(-(b[2] - a[2]), b[0] - a[0])
 
-/** Turns the camera toward `yaw` and searches its pitch until the reticle's aim point is `range` metres from the ship. */
+/** Turns the camera toward `yaw` and searches its pitch until the reticle's aim point is `range` metres from the ship, or on a hull. */
 const aimAtRange = async (page: Page, yaw: number, range: number) => {
   let low = -0.08
   let high = 0.6
@@ -114,6 +114,8 @@ const aimAtRange = async (page: Page, yaw: number, range: number) => {
     await page.evaluate(([yaw, pitch]) => window.brickwake?.orbit(yaw, pitch), [yaw, pitch] as const)
     await page.waitForTimeout(60)
     const aim = await hook(page, (h) => h.aim())
+    // A ray that meets a hull on the way is aimed at that ship already.
+    if (aim?.onHull === true) return aim
     // Steeper looks land nearer; no aim means the ray passed over the sea's edge of range.
     if (aim?.aimPoint == null || aim.range > range) low = pitch
     else high = pitch
@@ -801,6 +803,108 @@ const freePort = async () => {
   return port
 }
 
+/**
+ * Plays C9: settings from the title (sliders and graphics apply at once and persist across a reload), the first-run
+ * controls hint in order, Esc pausing this view while the server's match goes on, and the reticle landing on a hull.
+ */
+const ux = async (browser: Browser, url: string) => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } })
+  const page = await context.newPage()
+  await page.goto(url)
+  await page.waitForFunction(() => window.brickwake?.joined === true && window.brickwake.ownShip() !== null, undefined, { timeout: 15_000 })
+  const strip = (await page.locator("#overlay .menu-keys").textContent()) ?? ""
+  check(strip.includes("gunport view") && strip.includes("pause"), `the controls strip names the gunport view and Esc (${strip})`)
+  await page.locator('#overlay [data-action="settings"]').click()
+  check((await hook(page, (h) => h.ui())).settingsOpen && !(await hook(page, (h) => h.sailing)), "Settings on the title opens the panel without setting sail")
+  await page.locator('#settings [data-st="sensitivity"]').fill("1.8")
+  await page.locator('#settings [data-st="volume"]').fill("0.45")
+  await page.locator('#settings [data-st="ambience"]').fill("0.6")
+  await page.locator('#settings [data-quality="low"]').click()
+  const low = await hook(page, (h) => h.ui())
+  check(low.cameraSensitivity === 1.8 && low.volume === 0.45 && low.ambience === 0.6, `sliders apply at once (${JSON.stringify(low)})`)
+  check(!low.graphics.bloom && !low.graphics.shadows && low.graphics.samples === 0, `Low graphics drops bloom, shadows and MSAA (${JSON.stringify(low.graphics)})`)
+  await page.waitForTimeout(400)
+  await page.screenshot({ path: ".shots/c9-settings-low.png" })
+  await page.reload()
+  await page.waitForFunction(() => window.brickwake?.joined === true && window.brickwake.ownShip() !== null, undefined, { timeout: 15_000 })
+  const kept = await hook(page, (h) => h.ui())
+  check(kept.settings.sensitivity === 1.8 && kept.settings.volume === 0.45 && kept.settings.quality === "low" && kept.cameraSensitivity === 1.8, `settings persist across a reload (${JSON.stringify(kept.settings)})`)
+  await page.locator('#overlay [data-action="settings"]').click()
+  await page.locator('#settings [data-quality="high"]').click()
+  const high = await hook(page, (h) => h.ui())
+  check(high.graphics.bloom && high.graphics.shadows && high.graphics.samples === 4, "High graphics brings the full look back without a reload")
+  await page.waitForTimeout(400)
+  await page.screenshot({ path: ".shots/c9-settings.png" })
+  await page.keyboard.press("Escape")
+  check(!(await hook(page, (h) => h.ui())).settingsOpen, "Esc closes the settings panel")
+
+  await page.mouse.click(720, 450)
+  check(await hook(page, (h) => h.sailing), "a click sets sail")
+  check(await waitFor(page, (h) => h.ui().hint === "sail", 4000), "the first hint shows how to raise sail")
+  await page.waitForTimeout(500)
+  await page.screenshot({ path: ".shots/c9-hint.png" })
+  await page.keyboard.press("KeyW")
+  check(await waitFor(page, (h) => h.ui().hint === null, 3000), "the sail hint fades once sail is raised")
+  check(await waitFor(page, (h) => h.ui().hint === "steer", 4000), "then the rudder hint shows")
+  await page.keyboard.down("KeyD")
+  await page.waitForTimeout(300)
+  await page.keyboard.up("KeyD")
+  check(await waitFor(page, (h) => h.ui().hint === null, 3000), "the rudder hint fades once the player steers")
+  const next = await waitFor(page, (h) => h.ui().hint !== null, 3000)
+  const fireHint = await hook(page, (h) => ({ hint: h.ui().hint, state: h.aim()?.state }))
+  check(!next || fireHint.hint !== "fire" || fireHint.state === "ready", `the fire hint waits for a broadside that can bear (${JSON.stringify(fireHint)})`)
+
+  const sailBefore = (await hook(page, (h) => h.helm()))?.sail
+  const tickBefore = await hook(page, (h) => h.latestTick)
+  await page.keyboard.press("Escape")
+  const paused = await hook(page, (h) => h.ui())
+  check(paused.paused && paused.audioPaused && (await page.locator("#pause").isVisible()), "Esc pauses to the menu and ducks the sound")
+  const note = (await page.locator("#pause .pm-note").textContent()) ?? ""
+  check(note.includes("battle sails on"), `the pause menu says the match goes on (${note})`)
+  await page.keyboard.press("KeyS")
+  await page.waitForTimeout(1200)
+  check((await hook(page, (h) => h.helm()))?.sail === sailBefore, "a paused view takes no helm input")
+  const tickAfter = await hook(page, (h) => h.latestTick)
+  check(tickAfter - tickBefore >= 30, `the server's match runs on while paused (${tickAfter - tickBefore} ticks in 1.2 s)`)
+  check((await hook(page, (h) => h.ui())).hint === null, "the hint hides under the pause menu")
+  await page.screenshot({ path: ".shots/c9-pause.png" })
+  await page.locator('#pause [data-pm="settings"]').click()
+  check((await hook(page, (h) => h.ui())).settingsOpen, "Settings opens from the pause menu")
+  await page.keyboard.press("Escape")
+  const back = await hook(page, (h) => h.ui())
+  check(!back.settingsOpen && back.paused, "Esc in settings goes back to the pause menu")
+  await page.locator('#pause [data-pm="resume"]').click()
+  check(!(await hook(page, (h) => h.ui())).paused, "Back to the helm resumes")
+  await page.keyboard.press("Escape")
+  await page.keyboard.press("Escape")
+  check(!(await hook(page, (h) => h.ui())).paused && !(await hook(page, (h) => h.ui())).audioPaused, "Esc again resumes")
+  await context.close()
+
+  const dummyPage = await browser.newPage({ viewport: { width: 1280, height: 720 } })
+  await dummyPage.goto(`${url}?scenario=target-dummy`)
+  await dummyPage.waitForFunction(() => window.brickwake?.joined === true && window.brickwake.ships().length === 2, undefined, { timeout: 15_000 })
+  await dummyPage.mouse.click(640, 360)
+  check((await hook(dummyPage, (h) => h.ui())).hint === null, "scenario pages show no first-run hint")
+  await dummyPage.waitForTimeout(500)
+  const own = await ownShip(dummyPage)
+  const dummy = await shipById(dummyPage, "dummy")
+  const distance = Math.hypot(dummy.position[0] - own.position[0], dummy.position[2] - own.position[2])
+  const aim = await aimAtRange(dummyPage, bearing(own.position, dummy.position), distance)
+  check(aim.onHull && aim.aimPoint !== null && aim.aimPoint[1] > 0.5, `the reticle lands on the dummy's hull, above the sea (${JSON.stringify(aim)})`)
+  await dummyPage.screenshot({ path: ".shots/c9-hull-aim.png" })
+  const aimHeight = aim.aimPoint?.[1] ?? 0
+  check((await hook(dummyPage, (h) => h.fire())) === "fired", "the broadside fires at the hull")
+  check(await waitFor(dummyPage, (h) => h.events().filter((e) => e._tag === "ballHit").length >= 6, 6000), "the broadside strikes the hull")
+  const heights = (await hook(dummyPage, (h) => h.events().flatMap((e) => (e._tag === "ballHit" ? [e.point[1]] : [])))) as ReadonlyArray<number>
+  const meanHeight = heights.reduce((sum, y) => sum + y, 0) / heights.length
+  check(Math.abs(meanHeight - aimHeight) < 1.5, `balls land where the reticle was on the hull (aim ${aimHeight.toFixed(2)} m, hits mean ${meanHeight.toFixed(2)} m)`)
+  await dummyPage.close()
+  return [
+    `settings: sliders live, low↔high live, persisted; hint sail → steer → ${fireHint.hint ?? "(waiting for a bearing broadside)"}`,
+    `pause: ${tickAfter - tickBefore} server ticks while paused; hull aim ${aimHeight.toFixed(2)} m, ${heights.length} hits mean ${meanHeight.toFixed(2)} m`,
+  ].join("\n")
+}
+
 Effect.gen(function* () {
   const { address } = yield* HttpServer.HttpServer
   if (address._tag === "UnixPathAddress") return yield* Effect.die("game server is not on a TCP port")
@@ -826,7 +930,7 @@ Effect.gen(function* () {
     Effect.promise(() => chromium.launch({ args: ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist"] })),
     (browser) => Effect.promise(() => browser.close()),
   )
-  const checks = { c1: sail, c2: gunnery, c3: match, c4: bots, c5: scene, c6: wreck, c7: gunport, c8: tdm, fx: effects }
+  const checks = { c1: sail, c2: gunnery, c3: match, c4: bots, c5: scene, c6: wreck, c7: gunport, c8: tdm, c9: ux, fx: effects }
   const wanted = process.argv.slice(2)
   for (const [name, run] of Object.entries(checks)) {
     if (wanted.length > 0 && !wanted.includes(name)) continue

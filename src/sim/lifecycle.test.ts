@@ -171,3 +171,27 @@ test("a ship knocked onto its beam ends founders instead of sailing on capsized"
   expect(events.find((event) => event._tag === "shipSunk")).toMatchObject({ shipId: b, by: undefined })
   expect(ship(state, a).life._tag).toBe("afloat")
 })
+
+test("a capsize credits the last enemy to take HP within the credit window, and nobody after it", () => {
+  const start = scenarios.duel
+  const knockedDown = (hitAgo: number) => {
+    const time = start.tick * SIM_DT
+    const capsized = { ...ship(start, b), orientation: quatFromAxisAngle(vec3(1, 0, 0), 80 * (Math.PI / 180)), lastHitBy: { shipId: a, time: time - hitAgo } }
+    return run({ ...start, ships: start.ships.map((s) => (s.id === b ? capsized : s)) }, 1)
+  }
+  const recent = knockedDown(5)
+  expect(recent.events.find((event) => event._tag === "shipSunk")).toMatchObject({ shipId: b, by: a })
+  expect(ship(recent.state, a).kills).toBe(1)
+  const stale = knockedDown(tuning.sinking.capsizeCreditSeconds + 1)
+  expect(stale.events.find((event) => event._tag === "shipSunk")).toMatchObject({ shipId: b, by: undefined })
+  expect(ship(stale.state, a).kills).toBe(0)
+})
+
+test("a ball that takes HP marks its shooter as the target's last hitter", () => {
+  let state: MatchState = scenarios.duel
+  const full = ship(state, b).hp
+  expect(ship(state, b).lastHitBy).toBeUndefined()
+  for (let i = 0; i < 20 * SIM_HZ && ship(state, b).hp === full; i++) state = stepMatch(state, new Map(), aTargetsB(state)).state
+  expect(ship(state, b).hp).toBeLessThan(full)
+  expect(ship(state, b).lastHitBy).toMatchObject({ shipId: a })
+})

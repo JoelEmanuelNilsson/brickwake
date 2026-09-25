@@ -12,12 +12,17 @@ import type { Effects } from "./effects.ts"
 import type { Reticle, ReticleReading } from "./reticle.ts"
 import type { ShipPose } from "./timeline.ts"
 
+/** Distance along a world ray to the first part of another ship's hull within `reach`, or undefined when it meets none. */
+export type HullAlong = (origin: Vector3, direction: Vector3, reach: number) => number | undefined
+
 /** What a fire request did. */
 export type FireOutcome = "fired" | BroadsideRefusal | "no-aim"
 
 /** The reticle's aim as the debug hook reports it. */
 export interface AimReading {
   readonly aimPoint: readonly [number, number, number] | null
+  /** The aim is on a ship's hull rather than the sea. */
+  readonly onHull: boolean
   readonly side: BroadsideSide
   readonly state: ReticleReading["state"]
   readonly range: number
@@ -60,6 +65,9 @@ export class Gunnery {
   readonly #ring: Mesh<RingGeometry, MeshBasicMaterial>
   readonly #aim = new Vector3()
   #hasAim = false
+  /** The aim is on another ship's hull, not the sea: the spread ring would lie hidden under it. */
+  #onHull = false
+  readonly #hullAlong: HullAlong
   readonly #reading: ReticleReading = { side: "starboard", state: "no-aim", range: 0, reloadLeft: 0, loaded: 1 }
   /** Reload deadlines assumed from our own orders until snapshots carry the server's. */
   readonly #ordered = { port: Number.NEGATIVE_INFINITY, starboard: Number.NEGATIVE_INFINITY }
@@ -83,6 +91,7 @@ export class Gunnery {
     hits: 0,
     damage: 0,
     team: undefined,
+    lastHitBy: undefined,
   }
   readonly #aimScratch = { x: 0, y: 0, z: 0 }
   readonly #q = new Quaternion()
@@ -103,7 +112,9 @@ export class Gunnery {
     readonly ownId: () => string | null
     /** A gun fires on its drawn ship: animate it and write its muzzle's world position; false when the shooter is not drawn. */
     readonly gunFired: (ball: Cannonball, muzzle: Vector3) => boolean
+    readonly hullAlong: HullAlong
   }) {
+    this.#hullAlong = options.hullAlong
     this.#effects = options.effects
     this.#reticle = options.reticle
     this.#audio = options.audio
@@ -161,11 +172,17 @@ export class Gunnery {
     const r = this.#reading
     return {
       aimPoint: this.#hasAim ? [this.#aim.x, this.#aim.y, this.#aim.z] : null,
+      onHull: this.#hasAim && this.#onHull,
       side: r.side,
       state: r.state,
       range: r.range,
       reloadLeft: r.reloadLeft,
     }
+  }
+
+  /** True when the facing broadside could fire at the reticle now. */
+  get canFire(): boolean {
+    return this.#hasAim && this.#reading.state === "ready"
   }
 
   /** Fires the facing broadside at the reticle, or at `point` on the sea (debug), if it can fire. */
@@ -205,10 +222,20 @@ export class Gunnery {
     return "fired"
   }
 
-  /** Marches the camera's centre ray to the drawn sea at `time`; false when it meets no water within range. */
+  /** The aim under the camera's centre ray: the first ship hull it strikes, else the drawn sea at `time`; false when it meets neither within range. */
   #pickAim(camera: ChaseCamera, sea: SeaState, time: number, pose: ShipPose): boolean {
     const o = camera.aimOrigin
     const d = camera.aimDirection
+    const onSea = this.#pickSea(o, d, sea, time, pose)
+    const reach = onSea ? this.#aim.distanceTo(o) : maxAimRange
+    const hull = this.#hullAlong(o, d, reach)
+    this.#onHull = hull !== undefined
+    if (hull !== undefined) this.#aim.copy(d).multiplyScalar(hull).add(o)
+    return onSea || this.#onHull
+  }
+
+  /** Marches the ray to the drawn sea at `time`; false when it meets no water within range. */
+  #pickSea(o: Vector3, d: Vector3, sea: SeaState, time: number, pose: ShipPose): boolean {
     const gap = (t: number) => o.y + d.y * t - oceanHeight(sea, o.x + d.x * t, o.z + d.z * t, time)
     const descent = Math.max(-d.y, 0.02)
     let t = 0
@@ -265,8 +292,8 @@ export class Gunnery {
 
   #placeRing(reading: ReticleReading, sea: SeaState, time: number) {
     const ring = this.#ring
-    ring.visible = this.#hasAim
-    if (!this.#hasAim || this.#pose === undefined) return
+    ring.visible = this.#hasAim && !this.#onHull
+    if (!ring.visible || this.#pose === undefined) return
     const aim = this.#aim
     ring.position.set(aim.x, oceanHeight(sea, aim.x, aim.z, time) + 0.15, aim.z)
     ring.rotation.y = Math.atan2(-(aim.z - this.#pose.z), aim.x - this.#pose.x)

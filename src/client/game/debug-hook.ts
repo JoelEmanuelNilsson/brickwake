@@ -13,6 +13,8 @@ import type { MatchHud, MatchHudText, MatchReading } from "./match-hud.ts"
 import type { FrameAverages, FrameSpread, FrameStats } from "./frame-stats.ts"
 import type { BrickDebris, DebrisStats } from "./brick-debris.ts"
 import type { ShipPose, SnapshotTimeline } from "./timeline.ts"
+import type { HintStep } from "./controls-hint.ts"
+import type { GameSettings, Graphics } from "./settings.ts"
 
 /** A ship as the client draws it at the render time. Angles in radians, as in `ShipAttitude`. */
 export interface DebugShip {
@@ -132,6 +134,23 @@ export interface BrickwakeDebug {
   measure(frames: number): FrameMeasure
   /** A drawn ship's damage: parts gone, sorted, and parts left on its meshes; null when the ship is not drawn. */
   wreck(id: string): DebugWreck | null
+  /** Pause and settings menus, the first-run hint on show, and the settings in force. */
+  ui(): DebugUi
+}
+
+/** The game's menus and settings as the player sees them. */
+export interface DebugUi {
+  readonly paused: boolean
+  readonly settingsOpen: boolean
+  readonly hint: HintStep | null
+  readonly settings: GameSettings
+  readonly graphics: Graphics
+  /** The mouse sensitivity the chase camera turns by; null before the first welcome. */
+  readonly cameraSensitivity: number | null
+  /** Master and ambience volume the mix runs at, and whether the pause duck is on. */
+  readonly volume: number
+  readonly ambience: number
+  readonly audioPaused: boolean
 }
 
 /** One ship's damage as the client draws it. */
@@ -169,6 +188,7 @@ export interface DebugSource {
   readonly matchHud: () => MatchHud
   readonly measure: (frames: number) => FrameMeasure
   readonly wreck: (id: string) => { readonly gone: ReadonlyArray<number>; readonly drawnParts: number } | undefined
+  readonly ui: () => DebugUi
 }
 
 const describeShip = (id: string, pose: ShipPose, livery: string | undefined, sea: SeaState | undefined, time: number): DebugShip => {
@@ -278,6 +298,7 @@ export const installDebugHook = (source: DebugSource): void => {
       const wreck = source.wreck(id)
       return wreck === undefined ? null : { gone: [...wreck.gone].sort((a, b) => a - b), drawnParts: wreck.drawnParts }
     },
+    ui: () => source.ui(),
     paintOwn: (name) => source.paintOwn(name === "pirate" ? pirateLivery : name === "navy-lion" ? navyLionLivery : navyFleurLivery),
     gunport: (held, look) => {
       const chase = source.camera()

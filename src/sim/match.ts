@@ -234,10 +234,21 @@ const isAfloat = (ship: ShipState) => ship.life._tag === "afloat"
 const unscored = { kills: 0, deaths: 0, shots: 0, hits: 0, damage: 0 } as const
 const isAbove = (ship: ShipState) => ship.life._tag !== "sunk"
 
+/**
+ * The side a TDM ship respawns on: its own, unless that side outnumbers the other by two or more (a captain left and
+ * no bot is there to make up the numbers); then it crosses over, so sides even out at the next sinks, never mid-fight.
+ */
+const respawnTeam = (ships: ReadonlyArray<ShipState>, ship: ShipState): ShipState["team"] => {
+  if (ship.team === undefined) return undefined
+  const own = ships.filter((other) => other.team === ship.team).length
+  const other: Team = ship.team === "pirates" ? "navy" : "pirates"
+  return own - ships.filter((s) => s.team === other).length >= 2 ? other : ship.team
+}
+
 /** The ship back on the spawn ring at `time`, clear of every ship still above water, keeping its side and score. */
 const respawn = (state: MatchState, ships: ReadonlyArray<ShipState>, ship: ShipState, time: number): ShipState => {
   const clear = ships.filter((other) => other.id !== ship.id && isAbove(other))
-  const fresh = makeShip(spawnPoint({ ...state, ships: clear }, ship.id, ship.team), state.sea, time)
+  const fresh = makeShip(spawnPoint({ ...state, ships: clear }, ship.id, respawnTeam(ships, ship)), state.sea, time)
   const { kills, deaths, shots, hits, damage } = ship
   return { ...fresh, spawn: ship.spawn + 1, kills, deaths, shots, hits, damage }
 }
@@ -314,8 +325,11 @@ export const stepMatch = (
     const floodEnd = rotate(ship.orientation, vec3(1, 0, 0)).y <= 0 ? 1 : -1
     moved = moved.with(index, { ...ship, hp: 0, life: { _tag: "sinking", since: start, floodEnd }, controls: { rudder: 0, sail: 0 } })
     pending = pending.filter((shot) => shot.shipId !== ship.id)
-    if (state.phase._tag === "playing") ({ ships: moved, teamSinks } = scoreSink(state.rules, { ships: moved, teamSinks }, ship.id, undefined))
-    events.push({ _tag: "shipSunk", tick: state.tick, time: start, shipId: ship.id, by: undefined })
+    const hit = ship.lastHitBy
+    const by =
+      hit !== undefined && start - hit.time <= tuning.sinking.capsizeCreditSeconds && moved.some((other) => other.id === hit.shipId) ? hit.shipId : undefined
+    if (state.phase._tag === "playing") ({ ships: moved, teamSinks } = scoreSink(state.rules, { ships: moved, teamSinks }, ship.id, by))
+    events.push({ _tag: "shipSunk", tick: state.tick, time: start, shipId: ship.id, by })
   }
   // A foundering hull still stops balls (they break bricks for no HP); a sunk one is under the sea.
   const flying: Array<Cannonball> = []
@@ -332,8 +346,9 @@ export const stepMatch = (
       const credited = moved[shooter]!
       moved = moved.with(shooter, { ...credited, hits: credited.hits + 1, damage: credited.damage + target.hp - hp })
     }
+    const lastHitBy = shooter >= 0 && hp < target.hp ? { shipId: ball.shooter, time } : target.lastHitBy
     if (hp > 0) {
-      moved = moved.with(index, { ...target, hp })
+      moved = moved.with(index, { ...target, hp, lastHitBy })
       return { damage: target.hp - hp, hp, sunk: undefined }
     }
     // The end the killing ball struck floods first, so the ship goes down by the bow or the stern.
@@ -409,7 +424,7 @@ export const stepMatch = (
       moved = moved.map((ship) => {
         if (!isAfloat(ship) || (ship.hp === tuning.damage.hullHp && ship.removedParts.length === 0)) return { ...ship, ...unscored }
         events.push({ _tag: "shipRepaired", tick: state.tick, shipId: ship.id })
-        return { ...ship, ...unscored, hp: tuning.damage.hullHp, removedParts: [] }
+        return { ...ship, ...unscored, hp: tuning.damage.hullHp, removedParts: [], lastHitBy: undefined }
       })
       teamSinks = noTeamSinks
       break

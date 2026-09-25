@@ -2,8 +2,8 @@ import { Euler, MathUtils, Matrix4, type Object3D, PerspectiveCamera, Quaternion
 import type { GalleonModel } from "./galleon.ts"
 import { gunportFov, gunportNear, GunportView } from "./gunport-view.ts"
 
-/** Radians of orbit per pixel of mouse movement. */
-const sensitivity = 0.0022
+/** Radians of orbit per pixel of mouse movement at sensitivity 1. */
+const radiansPerPixel = 0.0022
 const minPitch = -0.08
 const maxPitch = 1.25
 const minDistance = 16
@@ -35,6 +35,8 @@ export class ChaseCamera {
   /** Elevation of the camera above the focus, radians. */
   pitch = 0.28
   distance = 42
+  /** Mouse look speed as a multiple of the default (the sensitivity setting). */
+  sensitivity = 1
   /** The unshaken centre ray the reticle aims along: from the camera toward the focus. */
   readonly aimOrigin = new Vector3()
   readonly aimDirection = new Vector3(1, 0, 0)
@@ -76,9 +78,10 @@ export class ChaseCamera {
 
   /** Orbits by a mouse movement in pixels; at the gunport, turns the view within the port's arc. */
   look(dx: number, dy: number): void {
-    if (this.gunport.held) return this.gunport.look(dx, dy, sensitivity)
-    this.yaw -= dx * sensitivity
-    this.pitch = Math.max(minPitch, Math.min(maxPitch, this.pitch + dy * sensitivity))
+    const perPixel = radiansPerPixel * this.sensitivity
+    if (this.gunport.held) return this.gunport.look(dx, dy, perPixel)
+    this.yaw -= dx * perPixel
+    this.pitch = Math.max(minPitch, Math.min(maxPitch, this.pitch + dy * perPixel))
   }
 
   /** Zooms by a wheel delta. */
