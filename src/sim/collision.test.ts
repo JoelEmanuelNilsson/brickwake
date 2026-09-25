@@ -51,10 +51,9 @@ test("overlapping ships are pushed apart evenly, and closing speed is taken out"
   const base = createMatch({ seed: 1, sea: seas.calm, wind, ships: [{ id: a, x: 0, z: 0, heading: 0 }, { id: b, x: 0, z: 5, heading: 0 }] })
   const [s1, s2] = pair(base)
   const closing = [{ ...s1, velocity: vec3(0, 0, 2) }, { ...s2, velocity: vec3(0, 0, -2) }]
-  const [c1, c2] = collideShips(closing, () => true)
+  const [c1, c2] = collideShips(closing)
   expect(c2!.position.z - c1!.position.z).toBeCloseTo(2 * tuning.collision.radius, 6)
   expect(c1!.position.z).toBeCloseTo(-1.5, 6)
   expect(c2!.velocity.z - c1!.velocity.z).toBeGreaterThan(0)
   expect(c2!.velocity.z - c1!.velocity.z).toBeLessThan(4 * tuning.collision.restitution + 0.01)
-  expect(collideShips(closing, (ship) => ship.id !== b)).toEqual(closing)
 })

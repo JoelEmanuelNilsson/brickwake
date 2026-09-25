@@ -50,8 +50,24 @@ export interface WindSnapshot extends Schema.Schema.Type<typeof WindSnapshot> {}
 export const ShipLifeSchema = Schema.TaggedUnion({
   afloat: {},
   sinking: { since: Schema.Finite, floodEnd: Schema.Literals([1, -1]), floodSide: Schema.Literals([1, -1]) },
-  sunk: { respawnAt: Schema.Finite },
 })
+
+/** The hull a respawning ship left sinking: what `stepShip` needs to sink it on. Axes and units as in `ShipState`. */
+export const HulkSnapshot = Schema.Struct({
+  position: Vec3Tuple,
+  orientation: QuatTuple,
+  velocity: Vec3Tuple,
+  angularVelocity: Vec3Tuple,
+  rudderAngle: Schema.Finite,
+  sailSet: Schema.Finite,
+  since: Schema.Finite,
+  floodEnd: Schema.Literals([1, -1]),
+  floodSide: Schema.Literals([1, -1]),
+  removed: Schema.Array(Schema.Int),
+})
+
+/** Wire form of a hulk. */
+export interface HulkSnapshot extends Schema.Schema.Type<typeof HulkSnapshot> {}
 
 /** A game mode on the wire, as in `MatchMode`. */
 export const MatchModeSchema = Schema.Literals(["ffa", "tdm"])
@@ -168,8 +184,8 @@ export const ServerEvent = Schema.TaggedUnion({
   ballSplash: { tick: Schema.Int, time: Schema.Finite, ballId: Schema.Int, point: Vec3Tuple },
   /** A ship's HP reached 0 at sim time `time`; `by` sank it (null when no ship did). */
   shipSunk: { tick: Schema.Int, time: Schema.Finite, shipId: ShipIdSchema, by: Schema.NullOr(ShipIdSchema) },
-  /** A ship re-entered on the spawn ring, after sinking or at a restart. */
-  shipRespawned: { tick: Schema.Int, shipId: ShipIdSchema },
+  /** A ship re-entered on the spawn ring, after sinking or at a restart; `hulk` is the hull it left sinking at the end of `tick`, null when it was afloat. */
+  shipRespawned: { tick: Schema.Int, shipId: ShipIdSchema, hulk: Schema.NullOr(HulkSnapshot) },
   /** A ship afloat was made whole in place: full HP, every part back. */
   shipRepaired: { tick: Schema.Int, shipId: ShipIdSchema },
 })
@@ -307,10 +323,54 @@ export const serverEvent = (event: MatchEvent): ServerEvent => {
     case "shipSunk":
       return { ...event, time: round(event.time, 6), by: event.by ?? null }
     case "shipRespawned":
+      return { ...event, hulk: event.hulk === undefined ? null : hulkSnapshot(event.hulk) }
     case "shipRepaired":
       return event
   }
 }
+
+// Unrounded: one goes out per sink, and clients step the hulk on from exactly where the server left it.
+const hulkSnapshot = (hulk: ShipState): HulkSnapshot | null => {
+  if (hulk.life._tag !== "sinking") return null
+  const { position: p, orientation: q, velocity: v, angularVelocity: w } = hulk
+  const { since, floodEnd, floodSide } = hulk.life
+  return {
+    position: [p.x, p.y, p.z],
+    orientation: [q.x, q.y, q.z, q.w],
+    velocity: [v.x, v.y, v.z],
+    angularVelocity: [w.x, w.y, w.z],
+    rudderAngle: hulk.rudderAngle,
+    sailSet: hulk.sailSet,
+    since,
+    floodEnd,
+    floodSide,
+    removed: hulk.removedParts,
+  }
+}
+
+/** The hulk ship `id` left sinking, as a ship `stepShip` sinks on: no orders, no HP, the parts it lost. */
+export const hulkFromWire = (id: ShipId, hulk: HulkSnapshot): ShipState => ({
+  id,
+  position: vec3(...hulk.position),
+  orientation: { x: hulk.orientation[0], y: hulk.orientation[1], z: hulk.orientation[2], w: hulk.orientation[3] },
+  velocity: vec3(...hulk.velocity),
+  angularVelocity: vec3(...hulk.angularVelocity),
+  controls: { rudder: 0, sail: 0 },
+  rudderAngle: hulk.rudderAngle,
+  sailSet: hulk.sailSet,
+  hp: 0,
+  reloadedAt: { port: 0, starboard: 0 },
+  life: { _tag: "sinking", since: hulk.since, floodEnd: hulk.floodEnd, floodSide: hulk.floodSide },
+  spawn: 0,
+  kills: 0,
+  deaths: 0,
+  removedParts: hulk.removed,
+  shots: 0,
+  hits: 0,
+  damage: 0,
+  team: undefined,
+  lastHitBy: undefined,
+})
 
 /** The ball a `cannonFired` event launched, for `ballPositionAt`. */
 export const ballFromWire = (event: Extract<ServerEvent, { readonly _tag: "cannonFired" }>): Cannonball => ({

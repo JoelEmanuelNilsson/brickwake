@@ -300,10 +300,9 @@ export class MatchHud {
       this.#ownTeam = team
     }
     if (own !== undefined && own.life !== "afloat" && phase._tag !== "ended") {
-      const respawnAt = own.life === "sinking" ? own.lifeTime + tuning.sinking.seconds + tuning.sinking.respawnSeconds : own.lifeTime
       const by = this.#sunkBy.get(reading.ownId)
-      title = own.life === "sinking" ? "Your ship is going down" : "Sunk"
-      sub = `${by ? `Sunk by ${shipName(by)} · ` : ""}Back on the water in ${Math.max(0, Math.ceil(respawnAt - renderTime))}`
+      title = "Your ship is going down"
+      sub = `${by ? `Sunk by ${shipName(by)} · ` : ""}Back on the water in ${Math.max(0, Math.ceil(own.lifeTime + tuning.sinking.respawnSeconds - renderTime))}`
       tone = "danger"
     } else if (team && renderTime - this.#sideChangedAt < sideBannerSeconds) {
       title = "Sides evened"

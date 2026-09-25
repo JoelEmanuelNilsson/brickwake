@@ -32,13 +32,9 @@ const toLocal = (ship: ShipState, world: Vec3) => rotateInverse(ship.orientation
 /**
  * Pushes overlapping ships apart in the horizontal plane: each hull is a capsule along its keel. Overlap is split
  * evenly and closing speed at the contact is taken out with a slightly bouncy impulse, which also swings the hulls.
- * `collides(ship)` picks the ships that take part; the rest pass through untouched. No damage (spec: ram damage later).
+ * No damage (spec: ram damage later).
  */
-export const collideShips = (
-  ships: ReadonlyArray<ShipState>,
-  collides: (ship: ShipState) => boolean,
-  hull: Hull = defaultHull,
-): ReadonlyArray<ShipState> => {
+export const collideShips = (ships: ReadonlyArray<ShipState>, hull: Hull = defaultHull): ReadonlyArray<ShipState> => {
   const out = [...ships]
   const { radius, restitution } = tuning.collision
   // Hulls meet side on, so the sway added mass sets how hard they push; each takes half the closing momentum.
@@ -47,7 +43,6 @@ export const collideShips = (
     for (let j = i + 1; j < out.length; j++) {
       let a = out[i]!
       let b = out[j]!
-      if (!collides(a) || !collides(b)) continue
       const ka = keel(a)
       const kb = keel(b)
       const [pa, pb] = closestPoints(ka.start, ka.along, kb.start, kb.along)

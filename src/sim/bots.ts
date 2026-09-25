@@ -155,7 +155,7 @@ const chooseTurn = (state: MatchState, self: ShipState, heading: number, target:
       cost += b.weights.range * Math.max(0, (Math.hypot(x, z) - tuning.match.spawnRing.radius) / tuning.match.spawnRing.radius) ** 2
     }
     for (const ship of state.ships) {
-      if (ship.id === self.id || ship.life._tag === "sunk") continue
+      if (ship.id === self.id) continue
       for (const t of b.clearanceChecks) {
         const at = along(t)
         const gap = b.clearance - Math.hypot(at.x - ship.position.x - ship.velocity.x * t, at.z - ship.position.z - ship.velocity.z * t)
