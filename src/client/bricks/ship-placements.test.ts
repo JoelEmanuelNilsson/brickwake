@@ -5,13 +5,14 @@ import { BrickShipMesh, createBrickLibrary } from "./brick-ship-mesh.ts"
 import { shipPlacements } from "./ship-placements.ts"
 
 const ship = generateShip(galleonSpec)
-const { placements, partIndex, plugs } = shipPlacements(galleonSpec, ship)
+const { placements, plugs } = shipPlacements(galleonSpec, ship)
 const mesh = new BrickShipMesh(createBrickLibrary(), placements, plugs)
 
 test("the full galleon body fits the per-ship budget at near detail and leaves room for the rig", () => {
   const near = mesh.stats("near")
-  expect(placements.length).toBeLessThan(ship.parts.length)
-  expect(new Set(partIndex).size).toBe(placements.length)
+  expect(placements.length).toBe(ship.parts.length)
+  expect(near.parts).toBe(placements.filter((p) => p.hidden !== true).length)
+  expect(near.parts).toBeLessThan(ship.parts.length)
   // 300k triangles and 45 draws per ship, less headroom for ticket 11's masts, yards and sails.
   expect(near.triangles).toBeLessThanOrEqual(250_000)
   expect(near.draws).toBeLessThanOrEqual(38)
@@ -25,7 +26,7 @@ test("mid and far detail cost a quarter of near or less, and far drops the gun d
   expect(far.triangles).toBeLessThan(mid.triangles)
   expect(mid.draws).toBeLessThanOrEqual(14)
   expect(far.studs).toBe(0)
-  expect(far.parts).toBe(placements.filter((p) => p.interior !== true).length)
+  expect(far.parts).toBe(placements.filter((p) => p.interior !== true && p.hidden !== true).length)
   expect(placements.filter((p) => p.interior === true).length).toBeGreaterThan(300)
   expect(plugs).toHaveLength(ship.ports.length)
 })

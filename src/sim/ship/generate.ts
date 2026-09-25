@@ -1,3 +1,4 @@
+import { ShipAir } from "./air.ts"
 import type { Assembly } from "./assemblies.ts"
 import type { BrickColor } from "./colors.ts"
 import type { PartId } from "./parts.ts"
@@ -602,6 +603,11 @@ export const generateShip = (spec: ShipSpec): GeneratedShip => {
   // Whatever the bond cannot attach would fall off a real model, so it is left out.
   const seen = reachable(mottled.length, connectParts(mottled), keelParts(mottled))
   const attached = mottled.filter((_, i) => seen[i] === 1)
-  const edges = connectParts(attached)
-  return { parts: attached, edges, keel: keelParts(attached), ports, openings, pruned: mottled.length - attached.length }
+  // Paint is outside only: hull parts the outside cannot reach (ports sealed) are bare timber, as in ref-04's gun
+  // deck, so a breach shows broken wood against the painted hull instead of black on black.
+  const hullPaint = new Set(spec.strakes.flatMap((s) => [s.color, ...(s.mottle ?? []).map((m) => m.color)]))
+  const air = new ShipAir(attached, openings)
+  const finished = attached.map((p, i): ShipPart => (hullPaint.has(p.color) && air.partLevel(i) < 2 ? { ...p, color: pickMottle(spec.deckColor, spec.deckMottle, hash(p.x, p.y, p.z, 11)) } : p))
+  const edges = connectParts(finished)
+  return { parts: finished, edges, keel: keelParts(finished), ports, openings, pruned: mottled.length - attached.length }
 }

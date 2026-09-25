@@ -3,7 +3,8 @@ import { gunLayout } from "../gun-layout.ts"
 import { generateShip, gridMetres, placeAssembly } from "./generate.ts"
 import { toLdr } from "./ldr.ts"
 import { galleonSpec } from "./spec.ts"
-import { connectParts, exposure, keelParts, occupiedCells, reachable } from "./structure.ts"
+import { ShipAir } from "./air.ts"
+import { connectParts, keelParts, occupiedCells, reachable } from "./structure.ts"
 import { validateShip } from "./validate.ts"
 
 const ship = generateShip(galleonSpec)
@@ -61,13 +62,13 @@ test("removing a band of hull parts detaches exactly what lost its path to the k
 test("the hold is sealed: hull parts that face only the hold are left out of rendering", () => {
   const occupied = new Set(ship.parts.flatMap(occupiedCells).map((c) => c.join(",")))
   const open = (x: number, y: number, z: number) => !occupied.has(`${x},${y},${z}`)
-  const seen = exposure(ship.parts)
+  const air = new ShipAir(ship.parts)
   const facingHold = ship.parts.flatMap((p, i) => {
     if (p.y < 3 || p.y > 15 || p.x < 15 || p.x > 45) return []
     const cells = occupiedCells(p)
     const inward = cells.some(([x, y, z]) => open(x, y, z >= 0 ? z - 1 : z + 1))
     const outward = cells.some(([x, y, z]) => open(x, y, z >= 0 ? z + 1 : z - 1) || open(x, y - 1, z))
-    return inward && !outward ? [seen.parts[i]] : []
+    return inward && !outward ? [air.partLevel(i)] : []
   })
   expect(facingHold.length).toBeGreaterThan(10)
   expect(facingHold.every((v) => v === 0)).toBe(true)

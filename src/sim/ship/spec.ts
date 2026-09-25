@@ -81,6 +81,8 @@ export interface ShipSpec {
   readonly sheer: Curve
   /** Plate height the waist bulwark ends below, before sheer. */
   readonly rail: number
+  /** Plate height, before sheer, where the upper works start: parts from here up (bulwark rail, castles, rig) are cheap to hit. */
+  readonly upperWorks: number
   readonly castles: ReadonlyArray<Castle>
   readonly decks: ReadonlyArray<Deck>
   readonly deckColor: BrickColor
@@ -129,6 +131,7 @@ export const galleonSpec: ShipSpec = {
   transom: { x: 4, rake: 0.1 },
   sheer: [[0, 0], [50, 0], [58, 1], [63, 2], [68, 4]],
   rail: 42,
+  upperWorks: 38,
   castles: [
     { from: 0, to: 22, top: 47 },
     { from: 0, to: 11, top: 53 },
