@@ -179,6 +179,28 @@ export const tuning = {
      */
     flooding: { height: 0.5, perPart: 0.055, maxPerColumn: 0.7 },
   },
+  fire: {
+    /**
+     * A ball that takes HP from the hull or upper works sets the ship alight with chance `perHp` × the HP it took ×
+     * `referenceRange` / range, the last factor held within `rangeFactor`: a hull hit at 150 m 10 %, at 75 m 20 %, an
+     * upper-works hit 4 %. Sail hits fly on and start nothing.
+     */
+    perHp: 0.02,
+    referenceRange: 150,
+    rangeFactor: { min: 0.5, max: 2 },
+    /** Each fire burns `hpPerBurn` HP every `burnInterval` s for `seconds`, then burns out: 10 HP per fire. */
+    hpPerBurn: 1,
+    burnInterval: 2,
+    seconds: 20,
+    /** Fires a ship can carry at once; hits and spread past it start nothing. */
+    maxPerShip: 6,
+    /** A fire this many seconds old catches a spot `spreadDistance` m fore or aft with chance `spreadPerSecond` per second. */
+    spreadAfter: 5,
+    spreadPerSecond: 0.02,
+    spreadDistance: { min: 1.5, max: 3 },
+    /** Fires start no lower than this, ship-local metres: a hit near the waterline burns at the lower gun deck. */
+    minHeight: 0.8,
+  },
   sinking: {
     /** Seconds from HP 0 until the ship is under and out of play; it takes no orders and cannot be hit meanwhile. */
     seconds: 12,

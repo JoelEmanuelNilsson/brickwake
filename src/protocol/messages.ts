@@ -84,6 +84,12 @@ export const MatchPhaseSchema = Schema.TaggedUnion({
 /** Wire form of `MatchPhase`. */
 export type MatchPhaseSnapshot = typeof MatchPhaseSchema.Type
 
+/** A fire burning on a ship, as in `ShipFire`: ship-local point and the sim seconds it caught and burns out. */
+export const ShipFireSnapshot = Schema.Struct({ at: Vec3Tuple, since: Schema.Finite, endsAt: Schema.Finite })
+
+/** Wire form of one fire. */
+export interface ShipFireSnapshot extends Schema.Schema.Type<typeof ShipFireSnapshot> {}
+
 /** What a client needs to draw one ship at one tick. Axes and units as in `ShipState`. */
 export const ShipSnapshot = Schema.Struct({
   id: ShipIdSchema,
@@ -108,6 +114,8 @@ export const ShipSnapshot = Schema.Struct({
   damage: Schema.Finite,
   /** TDM side; null in FFA. */
   team: Schema.NullOr(TeamSchema),
+  /** Fires burning on the ship, oldest first. */
+  fires: Schema.Array(ShipFireSnapshot),
 })
 
 /** Wire form of one ship. */
@@ -262,7 +270,10 @@ export const shipSnapshot = (ship: ShipState): ShipSnapshot => ({
   hits: ship.hits,
   damage: ship.damage,
   team: ship.team ?? null,
+  fires: ship.fires.length === 0 ? noFires : ship.fires.map((fire) => ({ at: tuple(fire.localPoint, 2), since: round(fire.since, 4), endsAt: round(fire.endsAt, 4) })),
 })
+
+const noFires: ReadonlyArray<ShipFireSnapshot> = []
 
 /** The damaged ships' removed parts, for the welcome. */
 export const wreckSnapshots = (state: MatchState): ReadonlyArray<typeof ShipWreck.Type> =>
