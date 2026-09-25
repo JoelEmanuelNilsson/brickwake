@@ -63,6 +63,7 @@ flowchart LR
 - [Galleon: decks, castles and cannons](issues/10-galleon-hull-decks-guns.md) — 4,323 parts, 24 cannons on two decks; 3 LODs (near 236k tris/36 draws, mid 61k, far 40k); fleet of 12 at 7.2 ms median; revealed-on-hit parts need growable instance pools.
 - [Audio](issues/16-audio.md) — `src/client/audio/`, sounds synthesized in a worker at load, positional with speed-of-sound delay, compressor+limiter; `/sound.html` test page; `game.audio.hullHit/sinking/plunge` for 15; mix table for 19.
 - [Bots](issues/07-bots.md) — pure `src/sim/bots.ts`, 5 bots fill quick play; headless 8-min match in ~6 s with a winner; bots hit 65–72 % at 150 m (too deadly — tune `tuning.bots.skill.aimError` in 19); they wear rather than tack.
+- [Galleon: masts, sails and rigging](issues/11-galleon-rig-and-sails.md) — three brick masts + cosmetic `ShipRig` (shader billow, furl 0/1/2, liveries); near 269k tris/40 draws; fleet 7.8 ms median; yards don't brace to the wind yet.
 
 ## Not yet specified
 
