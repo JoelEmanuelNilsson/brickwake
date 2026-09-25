@@ -14,8 +14,9 @@ const hits = document.querySelector<HTMLElement>("#hits")
 const pause = document.querySelector<HTMLElement>("#pause")
 const settings = document.querySelector<HTMLElement>("#settings")
 const hint = document.querySelector<HTMLElement>("#hint")
-if (canvas === null || hud === null || overlay === null || status === null || reticle === null || match === null || hits === null || pause === null || settings === null || hint === null) {
-  throw new Error("index.html is missing #scene, #hud, #overlay, #status, #reticle, #match, #hits, #pause, #settings or #hint")
+const feel = document.querySelector<HTMLElement>("#feel")
+if (canvas === null || hud === null || overlay === null || status === null || reticle === null || match === null || hits === null || pause === null || settings === null || hint === null || feel === null) {
+  throw new Error("index.html is missing #scene, #hud, #overlay, #status, #reticle, #match, #hits, #pause, #settings, #hint or #feel")
 }
 
 for (const rules of [ffaRules, tdmRules]) {
@@ -36,7 +37,7 @@ if (scenario !== null && !isScenario(scenario)) {
   overlay.querySelector(".overlay-hint")?.replaceChildren(`Unknown scenario “${scenario}”.`)
 } else {
   const room = params.get("room")
-  new Game(canvas, { hud, overlay, status, reticle, match, hits, pause, settings, hint }, {
+  new Game(canvas, { hud, overlay, status, reticle, match, hits, pause, settings, hint, feel }, {
     scenario: scenario ?? undefined,
     // With a scenario, clients naming the same room share it (two-browser tests).
     room: room ?? undefined,

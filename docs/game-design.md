@@ -119,6 +119,9 @@ UX is part of every checkpoint's check, not a final pass.
   upper works lose bricks for little HP; sail hits punch holes in the cloth.
 - HP decides gameplay; brick loss is the visible record of it. Tuning keeps them in
   agreement: a ship at 20 % HP looks badly holed.
+- Hits start fires. Each fire burns HP from where it caught until it burns out and may
+  spread along the side; the ship that started it is credited with the HP and the sink.
+  No crew fights fires: a burning ship keeps fighting and loses the race or wins it.
 
 ## Core loop
 
@@ -153,6 +156,7 @@ Sink ships to score. Sunk ships respawn.
 | Elevation / traverse | −4° … +12° / ±25° from perpendicular |
 | Per-gun spread | ±1° traverse, ±0.25° elevation, from the match's seeded RNG: a round patch about the reticle (±4 m across, ±6 m along at 220 m) |
 | Damage | per ball: hull 5, upper works 2, sails 1; hull 225 HP (~49 hits to sink); a hull hit knocks out ≤ 8 bricks, upper works ≤ 4; each sink credited to a ship repairs it by 30 % of full HP (68), up to full, and rebuilds the same share of its missing HP's bricks, newest first |
+| Fire | a hull or upper-works hit starts a fire with chance 2 % × its HP × (150 m / range, held to 0.5–2×): hull hit 10 % at 150 m, 20 % at 75 m; each fire burns 1 HP per 2 s for 20 s (10 HP); ≤ 6 per ship; a fire over 5 s old spreads 1.5–3 m fore or aft at 2 %/s |
 | Sinking / respawn | the ship respawns 3 s after HP 0 (meanwhile no control, no HP to take); the hulk it leaves sinks on in each client for 12 s in all: settles and lists for 6.5 s, then the struck end floods and the far end lifts before the plunge; a ship heeled or pitched past 75° capsizes and founders, credited to the last enemy that took its HP within 20 s |
 | FFA | first to 5 sinks or 10 min |
 | TDM | Pirates vs Navy, first to 8 sinks or 12 min; a ship respawning on a side two ships larger crosses over |

@@ -46,6 +46,8 @@ export interface DebugShip {
   readonly damage: number
   /** Name of the livery its sails fly, or null before it is drawn. */
   readonly livery: string | null
+  /** Fires burning on it. */
+  readonly fires: number
 }
 
 /** The match as the client shows it. */
@@ -224,6 +226,7 @@ const describeShip = (id: string, pose: ShipPose, livery: string | undefined, se
     hits: pose.hits,
     damage: pose.damage,
     livery: livery ?? null,
+    fires: pose.fires.length,
   }
 }
 

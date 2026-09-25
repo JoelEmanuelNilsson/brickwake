@@ -806,6 +806,63 @@ const effects = async (browser: Browser, url: string) => {
   ].join("\n")
 }
 
+/**
+ * Burning ships: flames, embers and smoke columns close up and across the water, the own ship's burning HUD, a broadside's
+ * explosions on the burning dummy, the particle counts and frame time while both burn.
+ */
+const burning = async (browser: Browser, url: string) => {
+  const page = await browser.newPage({ viewport: { width: 1600, height: 900 } })
+  await page.goto(`${url}?scenario=burning`)
+  await page.waitForFunction(() => window.brickwake?.joined === true && window.brickwake.ships().length === 2, undefined, { timeout: 15_000 })
+  await page.mouse.click(800, 450)
+  await page.waitForTimeout(3000)
+  const own = await ownShip(page)
+  const dummy = await shipById(page, "dummy")
+  check(own.fires > 0 && dummy.fires > 0, `both ships burn (own ${own.fires}, dummy ${dummy.fires})`)
+  const toward = bearing(own.position, dummy.position)
+  await page.evaluate((yaw) => window.brickwake?.orbit(yaw - 1.9, 0.12, 26), toward)
+  await page.waitForTimeout(1500)
+  await page.screenshot({ path: ".shots/fire-own.png" })
+  const hud = await hook(page, (h) => h.match()?.hud.fire ?? "")
+  check(hud.startsWith("On fire"), `the hull panel warns the ship is on fire ("${hud}")`)
+  await page.evaluate((yaw) => window.brickwake?.orbit(yaw, 0.02, 18), toward)
+  await page.evaluate(() => window.brickwake?.aimView(true))
+  await page.waitForTimeout(1500)
+  await page.screenshot({ path: ".shots/fire-dummy.png" })
+  await page.evaluate(() => window.brickwake?.aimView(false))
+  await page.evaluate((yaw) => window.brickwake?.orbit(yaw + 1.2, 0.35, 110), toward)
+  await page.waitForTimeout(2500)
+  await page.screenshot({ path: ".shots/fire-far.png" })
+  const counts = await hook(page, (h) => h.effects().particles)
+  const measure = await hook(page, (h) => h.measure(60))
+
+  await page.evaluate((yaw) => window.brickwake?.orbit(yaw, 0.02, 18), toward)
+  await page.evaluate(() => window.brickwake?.aimView(true))
+  await page.waitForTimeout(800)
+  const outcome = await page.evaluate((p) => window.brickwake?.fireAt(p), [dummy.position[0], 1, dummy.position[2]] as const)
+  check(outcome === "fired", `the broadside fires at the burning dummy (${outcome})`)
+  const hitAt = await waitFor(page, (h) => h.events().some((e) => e._tag === "ballHit"), 6000)
+  check(hitAt, "the broadside strikes the dummy")
+  for (const [i, wait] of [0, 90, 200, 900].entries()) {
+    await page.waitForTimeout(wait)
+    await page.screenshot({ path: `.shots/fire-hit-${i + 1}.png` })
+  }
+  const sunk = await waitFor(page, (h) => h.ships().find((s) => s.id === "dummy")?.life === "sinking", 4000)
+  check(sunk, "the broadside sinks the burning dummy")
+  await page.evaluate(() => window.brickwake?.aimView(false))
+  await page.evaluate((yaw) => window.brickwake?.orbit(yaw + 1.2, 0.35, 110), toward)
+  for (const [i, wait] of [150, 600, 2500].entries()) {
+    await page.waitForTimeout(wait)
+    await page.screenshot({ path: `.shots/fire-sink-${i + 1}.png` })
+  }
+  await page.close()
+  return [
+    `particles with both ships burning: ${JSON.stringify(counts)}`,
+    `frame waited on alone: median ${measure.median.toFixed(2)} ms, worst ${measure.worst.toFixed(2)} ms at ${measure.width}×${measure.height}`,
+    "saved .shots/fire-{own,dummy,far,hit-1..4,sink-1..3}.png",
+  ].join("\n")
+}
+
 const shipOrNull = (page: Page, id: string) => page.evaluate((id) => window.brickwake?.ships().find((s) => s.id === id) ?? null, id)
 
 const freePort = async () => {
@@ -943,7 +1000,7 @@ Effect.gen(function* () {
     Effect.promise(() => chromium.launch({ args: ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist"] })),
     (browser) => Effect.promise(() => browser.close()),
   )
-  const checks = { c1: sail, c2: gunnery, c3: match, c4: bots, c5: scene, c6: wreck, c7: aimView, c8: tdm, c9: ux, fx: effects, weather }
+  const checks = { c1: sail, c2: gunnery, c3: match, c4: bots, c5: scene, c6: wreck, c7: aimView, c8: tdm, c9: ux, fx: effects, weather, fire: burning }
   const wanted = process.argv.slice(2)
   for (const [name, run] of Object.entries(checks)) {
     if (wanted.length > 0 && !wanted.includes(name)) continue

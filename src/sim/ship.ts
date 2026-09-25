@@ -1,3 +1,4 @@
+import type { ShipFire } from "./fire.ts"
 import { defaultHull, type Hull } from "./hull.ts"
 import { sampleOcean, type SeaState } from "./ocean.ts"
 import { SIM_DT, tuning } from "./tuning.ts"
@@ -52,6 +53,7 @@ export type ShipLife =
 
 const afloat: ShipLife = { _tag: "afloat" }
 const intact: ReadonlyArray<number> = []
+const noFires: ReadonlyArray<ShipFire> = []
 
 /** A TDM side. */
 export type Team = "pirates" | "navy"
@@ -96,8 +98,10 @@ export interface ShipState {
   readonly damage: number
   /** The ship's side in TDM; undefined in FFA, where every ship fights for itself. Kept across respawns. */
   readonly team: Team | undefined
-  /** The last enemy whose ball took HP from this ship since it spawned, and when; a capsize within `tuning.sinking.capsizeCreditSeconds` credits it. */
+  /** The last enemy whose ball or fire took HP from this ship since it spawned, and when; a capsize within `tuning.sinking.capsizeCreditSeconds` credits it. */
   readonly lastHitBy: { readonly shipId: ShipId; readonly time: number } | undefined
+  /** Fires burning on the ship, oldest first; they burn HP while it is afloat and go out when it respawns; its hulk burns on in clients. */
+  readonly fires: ReadonlyArray<ShipFire>
 }
 
 /** Heading, pitch and heel of a ship, in radians. */
@@ -151,6 +155,7 @@ export const makeShip = (
   damage: 0,
   team: options.team,
   lastHitBy: undefined,
+  fires: noFires,
 })
 
 /**

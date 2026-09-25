@@ -37,6 +37,7 @@ const markup = /* html */ `
     <div class="hud-label">Hull</div>
     <div class="mh-hull-value" data-mh="hull-value">100</div>
     <div class="mh-hull"><div class="mh-hull-fill" data-mh="hull"></div></div>
+    <div class="mh-fire" data-mh="fire" hidden><span class="mh-fire-glyph"></span>On fire<b data-mh="fire-count"></b></div>
     <div class="hud-label mh-guns-label">Guns</div>
     <div class="mh-gun"><span>Port</span><div class="mh-gun-bar"><div class="mh-gun-fill" data-mh="port"></div></div></div>
     <div class="mh-gun"><span>Stbd</span><div class="mh-gun-bar"><div class="mh-gun-fill" data-mh="starboard"></div></div></div>
@@ -72,6 +73,8 @@ export interface MatchHudText {
   readonly teams: string
   /** Kill-feed lines, newest first. */
   readonly feed: ReadonlyArray<string>
+  /** The burning warning on the hull panel, or "" while the own ship is not on fire. */
+  readonly fire: string
 }
 
 const find = (root: HTMLElement, name: string) => {
@@ -141,12 +144,14 @@ export class MatchHud {
   readonly #boardScore: HTMLElement
   readonly #boardPirates: HTMLElement
   readonly #boardNavy: HTMLElement
-  readonly #ship: HTMLElement
   readonly #hull: HTMLElement
   readonly #hullValue: HTMLElement
+  readonly #ship: HTMLElement
+  readonly #fire: HTMLElement
+  readonly #fireCount: HTMLElement
   readonly #port: HTMLElement
   readonly #starboard: HTMLElement
-  readonly #shown = { hull: Number.NaN, port: Number.NaN, starboard: Number.NaN }
+  readonly #shown = { hull: Number.NaN, port: Number.NaN, starboard: Number.NaN, fires: 0 }
   #tabHeld = false
   #boardClock = 0
   #standingsKey = ""
@@ -182,9 +187,11 @@ export class MatchHud {
     this.#boardScore = find(root, "board-score")
     this.#boardPirates = find(root, "board-pirates")
     this.#boardNavy = find(root, "board-navy")
-    this.#ship = find(root, "ship")
     this.#hull = find(root, "hull")
     this.#hullValue = find(root, "hull-value")
+    this.#ship = find(root, "ship")
+    this.#fire = find(root, "fire")
+    this.#fireCount = find(root, "fire-count")
     this.#port = find(root, "port")
     this.#starboard = find(root, "starboard")
     window.addEventListener("keydown", (event) => {
@@ -215,7 +222,13 @@ export class MatchHud {
           },
       teams: this.#teams.hidden ? "" : `${this.#pirates.textContent}–${this.#navy.textContent}`,
       feed: [...this.#feed.children].map((line) => line.textContent ?? ""),
+      fire: this.#fire.hidden ? "" : (this.#fire.textContent ?? ""),
     }
+  }
+
+  /** The hull and guns panel, which jolts when the ship is struck. */
+  get shipPanel(): HTMLElement {
+    return this.#ship
   }
 
   /** Shows the HUD once sailing. */
@@ -291,6 +304,13 @@ export class MatchHud {
       this.#hull.dataset.level = share <= 0.3 ? "critical" : share <= 0.6 ? "hurt" : "sound"
       text(this.#hullValue, String(hp))
       shown.hull = hp
+    }
+    const fires = own === undefined || own.life !== "afloat" ? 0 : own.fires.length
+    if (fires !== shown.fires) {
+      this.#fire.hidden = fires === 0
+      this.#ship.dataset.burning = String(fires > 0)
+      text(this.#fireCount, fires > 1 ? `×${fires}` : "")
+      shown.fires = fires
     }
     for (const side of ["port", "starboard"] as const) {
       const reloadedAt = own === undefined ? 0 : side === "port" ? own.reloadPort : own.reloadStarboard

@@ -1,5 +1,6 @@
 import { decideBotControls, drawBotSkill, type Bot } from "./bots.ts"
 import { collideShips } from "./collision.ts"
+import { burnFires, igniteFromHit } from "./fire.ts"
 import { defaultHull } from "./hull.ts"
 import { gunLayout, type BroadsideSide } from "./gun-layout.ts"
 import { ballId, broadsideRefusal, fireGun, traceBall, type BallId, type BroadsideRefusal, type Cannonball } from "./gunnery.ts"
@@ -306,8 +307,8 @@ const respawn = (state: MatchState, ships: ReadonlyArray<ShipState>, ship: ShipS
 
 /**
  * Advances a match by one fixed 30 Hz tick (`SIM_DT`). Pure. Order: bots decide, helm and sail inputs, broadside orders, guns
- * due in the ripple fire (with recoil), ships move and push apart, balls fly and hit or splash, sinks score, sinking
- * ships respawn and leave their hulks, the match phase advances, wind.
+ * due in the ripple fire (with recoil), ships move and push apart, balls fly and hit, splash or set fires, fires burn, sinks score,
+ * sinking ships respawn and leave their hulks, the match phase advances, wind.
  */
 export const stepMatch = (
   state: MatchState,
@@ -398,27 +399,32 @@ export const stepMatch = (
     const shooter = moved.find((ship) => ship.id === ball.shooter)
     return shooter !== undefined && allies(shooter, target)
   }
+  const credit = (by: ShipId, damage: number, hits: number) => {
+    const index = moved.findIndex((ship) => ship.id === by)
+    if (index < 0) return
+    const credited = moved[index]!
+    moved = moved.with(index, { ...credited, hits: credited.hits + hits, damage: credited.damage + damage })
+  }
+  // The end and side the fatal blow struck flood first, so the ship lists to it and goes down by the bow or the stern.
+  const founder = (index: number, localPoint: Vec3, time: number, by: ShipId): ReadonlyArray<MatchEvent> => {
+    const target = moved[index]!
+    const floodEnd = localPoint.x >= 0 ? 1 : -1
+    const floodSide = localPoint.z >= 0 ? 1 : -1
+    moved = moved.with(index, { ...target, hp: 0, life: { _tag: "sinking", since: time, floodEnd, floodSide }, controls: { rudder: 0, sail: 0 } })
+    pending = pending.filter((shot) => shot.shipId !== target.id)
+    return creditSink(target.id, moved.some((ship) => ship.id === by) ? by : undefined, time)
+  }
   const takeHp = (index: number, zone: DamageZone, ball: Cannonball, time: number, localPoint: Vec3) => {
     const target = moved[index]!
     if (!isAfloat(target) || friendly(ball, target)) return { damage: 0, hp: target.hp, sunk: [] }
     const hp = Math.max(0, target.hp - hitDamage(zone))
-    const shooter = moved.findIndex((ship) => ship.id === ball.shooter)
-    if (shooter >= 0) {
-      const credited = moved[shooter]!
-      moved = moved.with(shooter, { ...credited, hits: credited.hits + 1, damage: credited.damage + target.hp - hp })
-    }
-    const lastHitBy = shooter >= 0 && hp < target.hp ? { shipId: ball.shooter, time } : target.lastHitBy
+    credit(ball.shooter, target.hp - hp, 1)
     if (hp > 0) {
+      const lastHitBy = hp < target.hp && moved.some((ship) => ship.id === ball.shooter) ? { shipId: ball.shooter, time } : target.lastHitBy
       moved = moved.with(index, { ...target, hp, lastHitBy })
       return { damage: target.hp - hp, hp, sunk: [] }
     }
-    // The end and side the killing ball struck flood first, so the ship lists to it and goes down by the bow or the stern.
-    const floodEnd = localPoint.x >= 0 ? 1 : -1
-    const floodSide = localPoint.z >= 0 ? 1 : -1
-    moved = moved.with(index, { ...target, hp, life: { _tag: "sinking", since: time, floodEnd, floodSide }, controls: { rudder: 0, sail: 0 } })
-    pending = pending.filter((shot) => shot.shipId !== target.id)
-    const by = moved.some((ship) => ship.id === ball.shooter) ? ball.shooter : undefined
-    return { damage: target.hp, hp, sunk: creditSink(target.id, by, time) }
+    return { damage: target.hp, hp, sunk: founder(index, localPoint, time, ball.shooter) }
   }
   for (const ball of balls) {
     // Pairs are rebuilt per ball: an earlier ball this tick may have holed a hull this one flies through.
@@ -445,6 +451,13 @@ export const stepMatch = (
     const removed = friendly(ball, moved[index]!) ? [] : struck.hit.removed
     if (removed.length > 0) moved = moved.with(index, { ...moved[index]!, removedParts: struck.removedParts })
     const { damage, hp, sunk } = takeHp(index, struck.hit.zone, ball, outcome.time, outcome.localPoint)
+    const struckShip = moved[index]!
+    if (struck.hit.zone !== "sails" && isAfloat(struckShip)) {
+      const range = Math.hypot(outcome.point.x - ball.origin.x, outcome.point.z - ball.origin.z)
+      const lit = igniteFromHit(struckShip.fires, { at: outcome.localPoint, damage, range, by: ball.shooter, time: outcome.time }, rng)
+      rng = lit.rng
+      if (lit.fires !== struckShip.fires) moved = moved.with(index, { ...struckShip, fires: lit.fires })
+    }
     events.push({
       _tag: "ballHit",
       tick: state.tick,
@@ -460,6 +473,23 @@ export const stepMatch = (
       hp,
     })
     events.push(...sunk)
+  }
+
+  // Fires burn HP from the ship afloat, credited to whoever started them; a foundering hull burns on for show.
+  for (let index = 0; index < moved.length; index++) {
+    const ship = moved[index]!
+    if (ship.fires.length === 0) continue
+    const burnt = burnFires(ship.fires, start, end, rng)
+    rng = burnt.rng
+    moved = moved.with(index, { ...ship, fires: burnt.fires })
+    for (const burn of burnt.burns) {
+      const target = moved[index]!
+      if (!isAfloat(target)) break
+      const hp = Math.max(0, target.hp - tuning.fire.hpPerBurn)
+      credit(burn.by, target.hp - hp, 0)
+      if (hp > 0) moved = moved.with(index, { ...target, hp, lastHitBy: { shipId: burn.by, time: start } })
+      else events.push(...founder(index, burn.localPoint, start, burn.by))
+    }
   }
 
   for (let index = 0; index < moved.length; index++) {
@@ -478,7 +508,7 @@ export const stepMatch = (
       moved = moved.map((ship) => {
         if (!isAfloat(ship) || (ship.hp === tuning.damage.hullHp && ship.removedParts.length === 0)) return { ...ship, ...unscored }
         events.push({ _tag: "shipRepaired", tick: state.tick, shipId: ship.id })
-        return { ...ship, ...unscored, hp: tuning.damage.hullHp, removedParts: [], lastHitBy: undefined }
+        return { ...ship, ...unscored, hp: tuning.damage.hullHp, removedParts: [], lastHitBy: undefined, fires: [] }
       })
       teamSinks = noTeamSinks
       break

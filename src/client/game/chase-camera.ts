@@ -92,7 +92,11 @@ export class ChaseCamera {
   /** Adds shake, 0…1; overlapping shakes saturate at 1. Felt as trauma², so small knocks stay subtle. */
   shake(amount: number): void {
     this.#trauma = Math.min(1, this.#trauma + amount)
+    this.onShake?.(amount)
   }
+
+  /** Hears every shake as it is added, so the HUD can jolt with the view. */
+  onShake: ((amount: number) => void) | undefined
 
   /** Current shake, 0…1. */
   get trauma(): number {

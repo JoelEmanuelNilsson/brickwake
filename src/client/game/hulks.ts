@@ -5,7 +5,9 @@ import { SIM_DT, tuning } from "../../sim/tuning.ts"
 import { makeWind } from "../../sim/wind.ts"
 import { shipFlooding } from "../../sim/wreck.ts"
 import type { ChaseCamera } from "./chase-camera.ts"
+import type { ShipFires } from "./ship-fires.ts"
 import type { ShipView } from "./ship-view.ts"
+import type { ShipPose } from "./timeline.ts"
 import type { SinkingShips } from "./sinking.ts"
 
 interface Hulk {
@@ -20,25 +22,35 @@ interface Hulk {
 
 /**
  * Hulls that sunk ships left behind as they respawned. The sim is done with them, so each sinks on here alone: the
- * same `stepShip` from the state the server handed over, in the view the ship was drawn in, until the sea hides it.
+ * same `stepShip` from the state the server handed over, in the view the ship was drawn in, burning with the fires it
+ * had, until the sea hides it.
  */
 export class Hulks {
   readonly #sinking: SinkingShips
+  readonly #fires: ShipFires
   readonly #release: (view: ShipView) => void
   readonly #hulks: Array<Hulk> = []
   #made = 0
 
   /** `release` takes back each view once its hulk is gone. */
-  constructor(sinking: SinkingShips, release: (view: ShipView) => void) {
+  constructor(sinking: SinkingShips, fires: ShipFires, release: (view: ShipView) => void) {
     this.#sinking = sinking
+    this.#fires = fires
     this.#release = release
   }
 
-  /** Ship `id` respawned and leaves `view`, drawn foundering, as hulk `hulk` at sim time `time`. */
-  add(id: string, view: ShipView, hulk: ShipState, time: number): void {
+  /** Ship `id` respawned and leaves `view`, drawn foundering with `fires` burning, as hulk `hulk` at sim time `time`. */
+  add(id: string, view: ShipView, hulk: ShipState, time: number, fires: ShipPose["fires"]): void {
     const key = `${id} hulk ${++this.#made}`
+    // The view's pose was just sampled from the ship's new life; the hulk goes on with the old one's.
+    if (hulk.life._tag === "sinking") {
+      view.pose.life = "sinking"
+      view.pose.lifeTime = hulk.life.since
+    }
+    view.pose.fires = fires
     view.group.name = key
     this.#sinking.handOff(id, key)
+    this.#fires.handOff(id, key)
     this.#hulks.push({ key, view, flooding: shipFlooding(hulk.removedParts), from: hulk, to: hulk, time })
   }
 
@@ -61,8 +73,12 @@ export class Hulks {
       writePose(h, Math.min(1, Math.max(0, 1 - (h.time - renderTime) / SIM_DT)))
       h.view.update(pose, windX, windZ, dt, camera.camera, viewportHeight)
       h.view.group.visible = this.#sinking.update(h.key, h.view, dt, renderTime, sea, camera)
-      if (h.view.group.visible) continue
+      if (h.view.group.visible) {
+        this.#fires.update(h.key, pose, dt, renderTime, sea, camera.camera, windX, windZ)
+        continue
+      }
       this.#sinking.forget(h.key)
+      this.#fires.forget(h.key)
       this.#release(h.view)
       this.#hulks.splice(i, 1)
     }
@@ -72,6 +88,7 @@ export class Hulks {
   clear(): void {
     for (const h of this.#hulks) {
       this.#sinking.forget(h.key)
+      this.#fires.forget(h.key)
       this.#release(h.view)
     }
     this.#hulks.length = 0

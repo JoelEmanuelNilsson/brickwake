@@ -103,6 +103,7 @@ export class Gunnery {
     damage: 0,
     team: undefined,
     lastHitBy: undefined,
+    fires: [],
   }
   readonly #aimScratch = { x: 0, y: 0, z: 0 }
   readonly #q = new Quaternion()

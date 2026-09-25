@@ -292,8 +292,11 @@ test("a broadside at the target dummy fires, hits, breaks bricks and lowers its 
     const at = ballPositionAt(ball, hit.time)
     expect(Math.hypot(at.x - hit.point[0], at.y - hit.point[1], at.z - hit.point[2])).toBeLessThan(0.01)
   }
-  const last = client.snapshots().at(-1)!.snapshot.ships.find((ship) => ship.id === dummyShipId)!
-  expect(last.hp).toBe(tuning.damage.hullHp - hits.reduce((sum, hit) => sum + hitDamage(hit.zone), 0))
+  for (const hit of hits) expect(hit.damage).toBe(hitDamage(hit.zone))
+  const lastShips = client.snapshots().at(-1)!.snapshot.ships
+  const last = lastShips.find((ship) => ship.id === dummyShipId)!
+  // Fires the hits started burn on, credited to the shooter like the hits.
+  expect(last.hp).toBe(tuning.damage.hullHp - lastShips.find((ship) => ship.id === welcome.shipId)!.damage)
   const removed = hits.flatMap((hit) => hit.removed)
   expect(removed.length).toBeGreaterThan(0)
 

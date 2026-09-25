@@ -151,10 +151,12 @@ test("a broadside at the drifting dummy hits it and each hit takes HP", () => {
   }
   // Most strike the facing port side's planking; a ball through a gunport or a fresh hole may strike the far side inside.
   expect(hits.filter((hit) => hit.localPoint.z < -2).length).toBeGreaterThan(hits.length / 2)
-  const taken = hits.reduce((sum, hit) => sum + hitDamage(hit.zone), 0)
-  expect(hits.at(-1)!.hp).toBe(tuning.damage.hullHp - taken)
+  for (const hit of hits) expect(hit.damage).toBe(hitDamage(hit.zone))
+  // Fires the hits started burn on between and after them, all credited to the shooter.
   const dummy1 = state.ships.find((ship) => ship.id === dummyShipId)!
-  expect(dummy1.hp).toBe(hits.at(-1)!.hp)
+  const shooter = state.ships.find((ship) => ship.id === scenarioShipId)!
+  expect(dummy1.hp).toBeLessThanOrEqual(hits.at(-1)!.hp)
+  expect(tuning.damage.hullHp - dummy1.hp).toBe(shooter.damage)
   expect(dummy1.removedParts).toEqual(hits.flatMap((hit) => hit.removed))
   expect(state.balls).toHaveLength(0)
 })

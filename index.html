@@ -179,6 +179,26 @@
       .mh-hull-fill[data-level="hurt"] { background: linear-gradient(90deg, #a24e24, #e0913f); }
       .mh-hull-fill[data-level="critical"] { background: linear-gradient(90deg, #7e2418, #e36b4f); animation: breathe 0.9s ease-in-out infinite; }
       .mh-guns-label { margin-top: 12px; }
+      .mh-fire {
+        display: flex; align-items: center; gap: 7px; margin-top: 8px; font-size: 12px; font-weight: 600; letter-spacing: 0.22em; text-transform: uppercase;
+        color: #ffb35c; text-shadow: 0 0 8px rgba(255, 110, 30, 0.9); animation: flicker 1.1s ease-in-out infinite;
+      }
+      .mh-fire[hidden] { display: none; }
+      .mh-fire b { margin-left: auto; letter-spacing: 0.06em; }
+      .mh-fire-glyph { width: 10px; height: 14px; border-radius: 50% 50% 45% 45% / 65% 65% 35% 35%; background: radial-gradient(ellipse at 50% 75%, #fff2c0, #ff9a2a 45%, #d8401a 80%); box-shadow: 0 0 8px #ff7a1e; animation: lick 0.45s ease-in-out infinite alternate; }
+      .mh-ship[data-burning="true"] { border-color: rgba(255, 128, 40, 0.55); box-shadow: 0 0 22px rgba(255, 96, 24, 0.28), inset 0 0 18px rgba(255, 96, 24, 0.12); }
+      .mh-ship[data-burning="true"] .mh-hull { box-shadow: 0 0 10px rgba(255, 110, 30, 0.55); }
+      @keyframes flicker { 0%, 100% { opacity: 1; } 30% { opacity: 0.78; } 55% { opacity: 0.95; } 75% { opacity: 0.7; } }
+      @keyframes lick { from { transform: scaleY(0.88) skewX(-4deg); } to { transform: scaleY(1.1) skewX(5deg); } }
+      #feel { position: fixed; inset: 0; pointer-events: none; }
+      .feel-layer { position: absolute; inset: 0; opacity: 0; will-change: opacity; }
+      .feel-burn {
+        background:
+          radial-gradient(ellipse 80% 70% at 50% 45%, rgba(255, 120, 30, 0) 55%, rgba(255, 104, 24, 0.22) 80%, rgba(214, 60, 12, 0.5) 100%),
+          radial-gradient(ellipse 70% 30% at 50% 110%, rgba(255, 140, 40, 0.35), rgba(255, 100, 20, 0) 100%);
+      }
+      .feel-hit { background: radial-gradient(ellipse 75% 70% at 50% 50%, rgba(180, 20, 10, 0) 50%, rgba(170, 22, 10, 0.45) 80%, rgba(110, 6, 2, 0.85) 100%); }
+      .feel-flash { background: radial-gradient(circle at 50% 50%, rgba(255, 238, 205, 0.55), rgba(255, 196, 130, 0.3) 70%, rgba(255, 170, 100, 0.2)); mix-blend-mode: screen; }
       .mh-gun { display: flex; align-items: center; gap: 10px; margin-top: 4px; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); }
       .mh-gun span { width: 36px; }
       .mh-gun-bar { flex: 1; height: 5px; border-radius: 2px; background: rgba(243, 233, 214, 0.12); overflow: hidden; }
@@ -307,6 +327,7 @@
   </head>
   <body>
     <canvas id="scene"></canvas>
+    <div id="feel"></div>
     <div id="hud" hidden></div>
     <div id="reticle" hidden></div>
     <div id="hits"></div>

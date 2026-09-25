@@ -22,10 +22,12 @@ import { FrameStats } from "./frame-stats.ts"
 import { Gunnery, type HullAlong } from "./gunnery.ts"
 import { HitIndicator } from "./hit-indicator.ts"
 import { Hud, type HudReading } from "./hud.ts"
+import { HudFeel } from "./hud-feel.ts"
 import { MatchHud, type MatchReading } from "./match-hud.ts"
 import { OceanSurface } from "./ocean.ts"
 import { Reticle } from "./reticle.ts"
 import { RenderPipeline } from "./render-pipeline.ts"
+import { ShipFires } from "./ship-fires.ts"
 import { ShipView } from "./ship-view.ts"
 import { Hulks } from "./hulks.ts"
 import { Wrecks, type Wreck } from "./wrecks.ts"
@@ -67,6 +69,8 @@ export interface GameElements {
   readonly pause: HTMLElement
   readonly settings: HTMLElement
   readonly hint: HTMLElement
+  /** Full-screen edge glows and flashes the HUD feels the battle with. */
+  readonly feel: HTMLElement
 }
 
 /** Where the title screen remembers the last quick-play mode chosen. */
@@ -123,6 +127,7 @@ export class Game {
   readonly #sweep = (entry: ShipEntry, id: string) => {
     if (entry.seen === this.#frameCount) return
     this.#releaseView(entry.view)
+    this.#fires.forget(id)
     this.#ships.delete(id)
   }
   readonly #releaseView = (view: ShipView) => {
@@ -140,6 +145,8 @@ export class Game {
   readonly #hud: Hud
   readonly #matchHud: MatchHud
   readonly #hitIndicator: HitIndicator
+  readonly #feel: HudFeel
+  readonly #fires: ShipFires
   readonly #sinking: SinkingShips
   readonly #hulks: Hulks
   /** Hulks respawned ships left, from their `shipRespawned` until the ship's new life is drawn, with the damage drawn on them. */
@@ -247,6 +254,7 @@ export class Game {
       ships: this.#ships,
     }
     this.#hitIndicator = new HitIndicator(elements.hits)
+    this.#feel = new HudFeel(elements.feel, [elements.hud, this.#matchHud.shipPanel, elements.hits], elements.reticle)
 
     this.#sky = createGameSky(this.renderer, sunDirection, weatherLooks.clear.sky)
     this.scene.fog = this.#fog
@@ -269,6 +277,7 @@ export class Game {
     sun.shadow.normalBias = 0.03
     this.scene.add(sun, sun.target, this.#hemisphere, this.#fill)
     this.effects = new Effects(this.scene, sunDirection)
+    this.#fires = new ShipFires(this.scene, this.effects, this.audio)
     this.#galleon = loadGalleon()
     this.#wrecks = new Wrecks(this.#galleon.graph)
     this.#debris = new BrickDebris(this.scene, this.#galleon, this.effects, this.audio)
@@ -299,7 +308,7 @@ export class Game {
       hullAlong: this.#hullAlong,
     })
     this.#sinking = new SinkingShips(this.effects, this.audio, this.#debris, this.#galleon)
-    this.#hulks = new Hulks(this.#sinking, this.#releaseView)
+    this.#hulks = new Hulks(this.#sinking, this.#fires, this.#releaseView)
     this.#wrecks.onStrike = (hit, detached) => this.#strikes.push({ hit, detached })
     this.eventHandlers.push((event) => this.#gunnery.onEvent(event))
     this.eventHandlers.push((event) => this.#onMatchEvent(event))
@@ -533,6 +542,7 @@ export class Game {
         const camera = this.#camera ?? new ChaseCamera(crest + cameraClearance)
         camera.minHeight = crest + cameraClearance
         this.#camera = camera
+        camera.onShake = (amount) => this.#feel.jolt(amount)
         camera.sensitivity = this.#settings.sensitivity
         const own = message.ships.find((ship) => ship.id === message.shipId)
         if (own !== undefined) {
@@ -570,6 +580,7 @@ export class Game {
       this.#hulksDue.set(event.shipId, { hulk: hulkFromWire(event.shipId, event.hulk), time: (event.tick + 1) * SIM_DT, wreck: this.#wrecks.of(event.shipId) })
     if (event._tag === "shipLeft") this.#hulksDue.delete(event.shipId)
     if (event._tag === "sailHit") this.#ships.get(event.target)?.view.punchSail(...event.localPoint)
+    this.#feelEvent(event)
     if (event._tag !== "ballHit" || event.target !== this.#shipId) return
     const own = this.#ships.get(event.target)?.view.pose
     const shooter = this.#ships.get(event.shooter)?.view.pose
@@ -578,6 +589,33 @@ export class Game {
     const fromX = shooter === undefined ? x - (own?.x ?? x) : shooter.x - (own?.x ?? 0)
     const fromZ = shooter === undefined ? z - (own?.z ?? z) : shooter.z - (own?.z ?? 0)
     this.#hitIndicator.hit(Math.atan2(-fromZ, fromX))
+  }
+
+  /** The HUD feels the battle: a flash for a nearby blast, the red edge when the own ship is struck, a glint as its guns fire. */
+  #feelEvent(event: ServerEvent) {
+    const eye = this.#camera?.camera.position
+    if (eye === undefined) return
+    switch (event._tag) {
+      case "cannonFired":
+        if (event.shooter === this.#shipId) this.#feel.blast(0.035)
+        return
+      case "ballHit": {
+        const [x, y, z] = event.point
+        this.#feel.blast(0.22 / (1 + (Math.hypot(x - eye.x, y - eye.y, z - eye.z) / 35) ** 2))
+        if (event.target === this.#shipId && event.damage > 0) this.#feel.struck(event.damage)
+        return
+      }
+      case "sailHit":
+        if (event.target === this.#shipId && event.damage > 0) this.#feel.struck(event.damage)
+        return
+      case "shipSunk": {
+        const pose = this.#ships.get(event.shipId)?.view.pose
+        if (pose !== undefined) this.#feel.blast(0.6 / (1 + (Math.hypot(pose.x - eye.x, pose.y - eye.y, pose.z - eye.z) / 80) ** 2))
+        return
+      }
+      default:
+        return
+    }
   }
 
   #resize() {
@@ -653,6 +691,7 @@ export class Game {
     const viewportHeight = this.renderer.domElement.height
     const ships = timeline.ships()
     this.#wake.begin()
+    this.#fires.begin(dt)
     for (let i = 0; i < ships.length; i++) {
       const id = ships[i]?.id
       if (id === undefined) continue
@@ -664,14 +703,14 @@ export class Game {
       }
       entry.seen = this.#frameCount
       let pose = entry.view.pose
-      const spawn = pose.spawn
+      const { spawn, fires } = pose
       if (timeline.sample(id, pose)) {
         if (!fresh && pose.spawn !== spawn) {
           const due = this.#hulksDue.get(id)
           if (due !== undefined) {
             // The ship's new life is drawn from here: its old view sinks on as a hulk, and the ship takes a fresh one.
             this.#hulksDue.delete(id)
-            this.#hulks.add(id, entry.view, due.hulk, due.time)
+            this.#hulks.add(id, entry.view, due.hulk, due.time, fires)
             entry = this.#newEntry(id)
             entry.seen = this.#frameCount
             pose = entry.view.pose
@@ -689,6 +728,7 @@ export class Game {
         }
         entry.view.update(pose, windX, windZ, dt, camera.camera, viewportHeight)
         entry.view.group.visible = this.#sinking.update(id, entry.view, dt, renderTime, ocean.sea, camera)
+        this.#fires.update(id, pose, dt, renderTime, ocean.sea, camera.camera, windX, windZ)
         if (pose.life === "afloat") {
           const forwardX = 1 - 2 * (pose.qy * pose.qy + pose.qz * pose.qz)
           const forwardZ = 2 * (pose.qx * pose.qz - pose.qw * pose.qy)
@@ -699,6 +739,7 @@ export class Game {
     }
     this.#ships.forEach(this.#sweep)
     this.#hulks.update(dt, renderTime, ocean.sea, this.#wind, camera, viewportHeight)
+    this.#fires.end()
     for (const { hit, detached } of this.#strikes) {
       const view = this.#ships.get(hit.target)?.view
       const ball = this.#gunnery.balls.find(hit.ballId)
@@ -760,6 +801,8 @@ export class Game {
       this.#matchHud.visible = this.#sailing
     }
     this.#hitIndicator.update(dt, camera.yaw + Math.PI)
+    const ownPose = own?.view.pose
+    this.#feel.update(dt, ownPose !== undefined && ownPose.life === "afloat" && this.#sailing ? ownPose.fires.length : 0)
     this.effects.update(dt, renderTime, windX, windZ, ocean.sea, camera.camera)
     this.#debris.update(dt, renderTime, ocean.sea, camera.camera.position, windX, windZ)
     this.#rain.update(renderTime, camera.camera.position, windX, windZ)

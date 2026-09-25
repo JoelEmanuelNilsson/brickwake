@@ -3,10 +3,12 @@ import {
   synthCannonBoom,
   synthCreak,
   synthDistantBoom,
+  synthFireCrackle,
   synthFuse,
   synthHullCrack,
   synthHullThud,
   synthHullWashLoop,
+  synthIgnite,
   synthOceanLoop,
   synthOpenSeaReverb,
   synthPlunge,
@@ -33,6 +35,8 @@ export interface OneShotSounds {
   readonly plunge: ReadonlyArray<Float32Array>
   readonly fuse: ReadonlyArray<Float32Array>
   readonly bell: ReadonlyArray<Float32Array>
+  readonly fireCrackle: ReadonlyArray<Float32Array>
+  readonly ignite: ReadonlyArray<Float32Array>
 }
 
 /** Names of the one-shot sounds in a `SoundBank`. */
@@ -78,6 +82,8 @@ export const renderSoundBank = (sampleRate: number): SoundBank => ({
     plunge: takes(2, 101, synthPlunge, sampleRate),
     fuse: takes(2, 113, synthFuse, sampleRate),
     bell: takes(1, 127, synthBell, sampleRate),
+    fireCrackle: takes(4, 163, synthFireCrackle, sampleRate),
+    ignite: takes(2, 167, synthIgnite, sampleRate),
   },
   loops: {
     ocean: synthOceanLoop(sampleRate, 131),
