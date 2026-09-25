@@ -1,6 +1,7 @@
 import { galleonGunSpec, type GunLayoutSpec } from "../gun-layout.ts"
 import { type Assembly, balustrade, cannon, figurehead, galleryRail, helm, lanternPost, railPost, skullPlaque, tallLanternPost } from "./assemblies.ts"
 import type { BrickColor } from "./colors.ts"
+import { galleonRig, type RigSpec } from "./rig.ts"
 import type { QuarterTurns } from "./structure.ts"
 
 /** A piecewise-linear curve as [input, output] points with increasing inputs; clamped at both ends. */
@@ -99,6 +100,7 @@ export interface ShipSpec {
   /** Stern gallery: a ledge a stud proud of the transom along the course at plate height `y`. */
   readonly gallery: { readonly y: number; readonly color: BrickColor }
   readonly ornaments: ReadonlyArray<Ornament>
+  readonly rig: RigSpec
   /** Accepted part count, [min, max]. */
   readonly partRange: readonly [number, number]
 }
@@ -209,5 +211,6 @@ export const galleonSpec: ShipSpec = {
     { assembly: balustrade, x: 58, y: "top", z: 6, mirror: true },
     { assembly: figurehead, x: 69, y: "top", z: -2, turns: 1 },
   ],
+  rig: galleonRig,
   partRange: [2500, 6000],
 }

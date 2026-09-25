@@ -8,7 +8,7 @@ export const brickColors: Readonly<Record<BrickColor, { readonly srgb: number; r
   black: { srgb: 0x10151d, finish: "plastic" },
   darkRed: { srgb: 0x720e0f, finish: "plastic" },
   red: { srgb: 0xc91a09, finish: "plastic" },
-  pearlGold: { srgb: 0xbcb48e, finish: "pearl" },
+  pearlGold: { srgb: 0xc9a04a, finish: "pearl" },
   tan: { srgb: 0xe4cd9e, finish: "plastic" },
   darkTan: { srgb: 0x958a73, finish: "plastic" },
   reddishBrown: { srgb: 0x582a12, finish: "plastic" },

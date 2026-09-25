@@ -1,6 +1,7 @@
 import type { Assembly } from "./assemblies.ts"
 import type { BrickColor } from "./colors.ts"
 import type { PartId } from "./parts.ts"
+import { rigParts } from "./rig.ts"
 import type { Curve, ShipSpec } from "./spec.ts"
 import { connectParts, footprint, heightInPlates, keelParts, occupiedCells, reachable, type QuarterTurns, type ShipEdge, type ShipPart } from "./structure.ts"
 
@@ -327,8 +328,9 @@ export const generateShip = (spec: ShipSpec): GeneratedShip => {
     const y = o.y === "top" ? columnTop(o.x, o.z) : o.y
     for (const mirror of o.mirror === true ? [false, true] : [false]) fixtures.push(...placeAssembly(o.assembly, o.x, y, o.z, o.turns ?? 0, mirror))
   }
+  const rig = rigParts(spec.rig)
   const reserved = new Uint8Array(inside.length)
-  for (const f of fixtures)
+  for (const f of [...fixtures, ...rig])
     for (const [x, p, z] of occupiedCells(f)) {
       if (!inGrid(x, p, z)) continue
       if (kind[at(x, p, z)] === wall) carve(x, p, z)
@@ -600,8 +602,9 @@ export const generateShip = (spec: ShipSpec): GeneratedShip => {
     return strake?.color === p.color ? { ...p, color: pickMottle(p.color, strake.mottle, roll) } : p
   })
   // Whatever the bond cannot attach would fall off a real model, so it is left out.
-  const seen = reachable(mottled.length, connectParts(mottled), keelParts(mottled))
-  const attached = mottled.filter((_, i) => seen[i] === 1)
+  const all = [...mottled, ...rig]
+  const seen = reachable(all.length, connectParts(all), keelParts(all))
+  const attached = all.filter((_, i) => seen[i] === 1)
   const edges = connectParts(attached)
-  return { parts: attached, edges, keel: keelParts(attached), ports, openings, pruned: mottled.length - attached.length }
+  return { parts: attached, edges, keel: keelParts(attached), ports, openings, pruned: all.length - attached.length }
 }
