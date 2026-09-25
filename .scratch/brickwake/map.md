@@ -62,6 +62,7 @@ flowchart LR
 - [Match rules, sinking and HUD](issues/06-match-rules-and-hud.md) — `rules.ts` mode switches (TDM = new cases), ship `life`/`spawn`/kills on the wire, physical stern-first sinking, pirate HUD + hit indicator; `bun run shot c3` two-browser check; 257 B/ship.
 - [Galleon: decks, castles and cannons](issues/10-galleon-hull-decks-guns.md) — 4,323 parts, 24 cannons on two decks; 3 LODs (near 236k tris/36 draws, mid 61k, far 40k); fleet of 12 at 7.2 ms median; revealed-on-hit parts need growable instance pools.
 - [Audio](issues/16-audio.md) — `src/client/audio/`, sounds synthesized in a worker at load, positional with speed-of-sound delay, compressor+limiter; `/sound.html` test page; `game.audio.hullHit/sinking/plunge` for 15; mix table for 19.
+- [Bots](issues/07-bots.md) — pure `src/sim/bots.ts`, 5 bots fill quick play; headless 8-min match in ~6 s with a winner; bots hit 65–72 % at 150 m (too deadly — tune `tuning.bots.skill.aimError` in 19); they wear rather than tack.
 
 ## Not yet specified
 
