@@ -14,6 +14,7 @@ export default defineConfig({
       input: {
         main: fileURLToPath(new URL("index.html", import.meta.url)),
         lab: fileURLToPath(new URL("lab.html", import.meta.url)),
+        sound: fileURLToPath(new URL("sound.html", import.meta.url)),
       },
     },
   },

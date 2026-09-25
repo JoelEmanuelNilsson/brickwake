@@ -5,7 +5,7 @@ import { ballVelocityAt, broadsideRefusal, type BroadsideRefusal, type Cannonbal
 import { oceanHeight, type SeaState } from "../../sim/ocean.ts"
 import { shipId } from "../../sim/ship.ts"
 import { tuning } from "../../sim/tuning.ts"
-import type { GameAudio } from "./audio.ts"
+import type { GameAudio } from "../audio/game-audio.ts"
 import { Cannonballs, type BallEnd } from "./balls.ts"
 import type { ChaseCamera } from "./chase-camera.ts"
 import type { Effects } from "./effects.ts"
@@ -102,8 +102,9 @@ export class Gunnery {
     this.#ownId = options.ownId
     this.balls = new Cannonballs(options.scene, {
       fired: (ball) => this.#fired(ball),
-      flying: (_ball, x, y, z) => {
+      flying: (ball, x, y, z) => {
         if (this.#trailClock <= 0) this.#effects.trail(x, y, z)
+        if (ball.shooter !== this.#ownId()) this.#audio.ballFlying(ball, x, y, z, this.#time)
       },
       ended: (end, ball) => this.#ended(end, ball),
     })
@@ -183,6 +184,8 @@ export class Gunnery {
     const side = reading.side
     this.#send({ _tag: "fireBroadside", side, aimPoint: [target.x, target.y, target.z] })
     this.#ordered[side] = this.#time + tuning.guns.reload
+    // The reading must say "reloading" from this moment, not from the next frame.
+    this.#read(target, pose, this.#time)
     this.#audio.sizzle()
     this.#q.set(pose.qx, pose.qy, pose.qz, pose.qw)
     for (const gun of guns[side]) {
@@ -266,6 +269,7 @@ export class Gunnery {
     const { origin, velocity } = ball
     const speed = Math.hypot(velocity.x, velocity.y, velocity.z)
     this.#effects.muzzle(origin.x, origin.y, origin.z, velocity.x / speed, velocity.y / speed, velocity.z / speed)
+    this.#audio.cannon(origin.x, origin.y, origin.z, this.#time - ball.firedAt)
     this.#shake(origin.x, origin.y, origin.z, ball.shooter === this.#ownId() ? 0.1 : 0.14, 60)
   }
 
@@ -275,6 +279,7 @@ export class Gunnery {
     const speed = velocity === undefined ? 70 : Math.hypot(velocity.x, velocity.y, velocity.z)
     if (end._tag === "ballSplash") {
       this.#effects.splash(x, y, z, speed)
+      this.#audio.splash(x, y, z, speed)
       this.#shake(x, y, z, 0.35, 30)
       return
     }
@@ -282,6 +287,7 @@ export class Gunnery {
     const dy = velocity === undefined ? 0 : velocity.y / speed
     const dz = velocity === undefined ? 1 : velocity.z / speed
     this.#effects.hit(x, y, z, dx, dy, dz)
+    this.#audio.hullHit(x, y, z, end.target === this.#ownId())
     this.#shake(x, y, z, 0.7, 45)
     if (end.shooter === this.#ownId()) this.#reticle.hit()
   }

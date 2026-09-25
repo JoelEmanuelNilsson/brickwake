@@ -19,7 +19,7 @@ import type { ScenarioName } from "../../sim/scenarios.ts"
 import type { ClientMessage, MatchPhaseSnapshot, ServerEvent, ServerMessage, WindSnapshot } from "../../protocol/messages.ts"
 import { ffaRules } from "../../sim/rules.ts"
 import { createSunsetSky } from "../lab/sky.ts"
-import { GameAudio } from "./audio.ts"
+import { GameAudio } from "../audio/game-audio.ts"
 import { ChaseCamera } from "./chase-camera.ts"
 import { connect, type Connection } from "./connection.ts"
 import { Controls } from "./controls.ts"
@@ -107,6 +107,8 @@ export class Game {
   readonly #sinking: SinkingShips
   #phase: MatchPhaseSnapshot = { _tag: "warmup", endsAt: 0 }
   readonly #matchReading: MatchReading
+  /** All game sound; `audio.volume` is the persisted volume setting. */
+  readonly audio = new GameAudio()
   /** Gun and impact effects; later systems (debris, sinking) add their own through it. */
   readonly effects: Effects
   readonly #gunnery: Gunnery
@@ -167,11 +169,11 @@ export class Game {
       scene: this.scene,
       effects: this.effects,
       reticle: new Reticle(elements.reticle),
-      audio: new GameAudio(),
+      audio: this.audio,
       send: (message) => this.#connection.send(message),
       ownId: () => this.#shipId,
     })
-    this.#sinking = new SinkingShips(this.effects)
+    this.#sinking = new SinkingShips(this.effects, this.audio)
     this.eventHandlers.push((event) => this.#gunnery.onEvent(event))
     this.eventHandlers.push((event) => this.#onMatchEvent(event))
 
@@ -211,6 +213,7 @@ export class Game {
       sea: () => this.#ocean?.sea,
       gunnery: () => this.#gunnery,
       effects: () => this.effects,
+      audio: () => this.audio,
       match: () => this.#matchReading,
       matchHud: () => this.#matchHud,
     })
@@ -225,6 +228,7 @@ export class Game {
 
   #setSail() {
     this.#sailing = true
+    //this.audio.start()
     this.elements.overlay.hidden = true
     if (this.#controls !== undefined) this.#controls.active = true
     this.#lockPointer()
@@ -376,6 +380,7 @@ export class Game {
     const windX = Math.cos(this.#wind.toward) * this.#wind.speed
     const windZ = -Math.sin(this.#wind.toward) * this.#wind.speed
     this.effects.update(dt, renderTime, windX, windZ, ocean.sea, camera.camera)
+    this.audio.update(dt, camera.camera, own?.view.pose, this.#wind.speed, this.#phase._tag)
     for (let i = 0; i < this.hooks.length; i++) this.hooks[i]?.(frame)
 
     this.#stats.beginGpu()
