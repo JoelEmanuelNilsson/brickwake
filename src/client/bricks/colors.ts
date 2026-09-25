@@ -1,7 +1,7 @@
 import type { BrickColor } from "../../sim/ship/colors.ts"
 
-/** Surface finish of a colour: ABS plastic, or LEGO's metallic pearl. */
-export type BrickFinish = "plastic" | "pearl"
+/** Surface finish of a colour: ABS plastic, LEGO's metallic pearl, or transparent plastic lit from behind (windows). */
+export type BrickFinish = "plastic" | "pearl" | "glow"
 
 /** Brick colours by name, with the sRGB value the renderer uses and the finish. */
 export const brickColors: Readonly<Record<BrickColor, { readonly srgb: number; readonly finish: BrickFinish }>> = {
@@ -19,5 +19,5 @@ export const brickColors: Readonly<Record<BrickColor, { readonly srgb: number; r
   yellow: { srgb: 0xf2cd37, finish: "plastic" },
   blue: { srgb: 0x0055bf, finish: "plastic" },
   darkBlue: { srgb: 0x0a3463, finish: "plastic" },
-  transOrange: { srgb: 0xf08f1c, finish: "plastic" },
+  transOrange: { srgb: 0xf08f1c, finish: "glow" },
 }

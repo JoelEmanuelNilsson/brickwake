@@ -103,6 +103,7 @@ const catalog = {
   "2489": { name: "Barrel", size: [2, 2], height: 40, studs: [], ldrawOrigin: [0, 40, 0] },
   "4790": { name: "Ship's wheel on post", size: [2, 1], overhangs: true, height: 72, studs: [], ldrawOrigin: [0, 8, 0] },
   "3633": { name: "Fence 1 x 4 x 1", size: [4, 1], height: 24, studs: [], ldrawOrigin: [0, 24, 0] },
+  "3068bp9b": { name: "Tile 2 x 2 with skull and crossbones pattern, upright on a bracket", size: [2, 1], overhangs: true, height: 48, studs: [], ldrawOrigin: [0, 48, 0] },
 } satisfies Record<string, PartInfo>
 
 /** LDraw part ID of a shape in `partCatalog`. */

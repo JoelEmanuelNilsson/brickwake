@@ -133,8 +133,8 @@ export interface Exposure {
   readonly hiddenStuds: ReadonlyArray<ReadonlyArray<number>>
 }
 
-/** Flood air in from outside the parts' bounds and report which parts and studs it touches. */
-export const exposure = (parts: ReadonlyArray<ShipPart>): Exposure => {
+/** Flood air in from outside the parts' bounds and report which parts and studs it touches; `sealed` cells count as solid. */
+export const exposure = (parts: ReadonlyArray<ShipPart>, sealed: ReadonlyArray<readonly [number, number, number]> = []): Exposure => {
   const cells = parts.map(occupiedCells)
   const all = cells.flat()
   const lo = [0, 1, 2].map((a) => all.reduce((m, c) => Math.min(m, c[a] ?? 0), Infinity) - 1)
@@ -146,6 +146,7 @@ export const exposure = (parts: ReadonlyArray<ShipPart>): Exposure => {
     x < x0 || y < y0 || z < z0 || x >= x0 + size[0] || y >= y0 + size[1] || z >= z0 + size[2] ? -1 : ((x - x0) * size[1] + (y - y0)) * size[2] + (z - z0)
   const solid = new Uint8Array(size[0] * size[1] * size[2])
   for (const [x, y, z] of all) solid[index(x, y, z)] = 1
+  for (const [x, y, z] of sealed) if (index(x, y, z) >= 0) solid[index(x, y, z)] = 1
   const air = new Uint8Array(solid.length)
   const stack: Array<number> = []
   const visit = (x: number, y: number, z: number) => {

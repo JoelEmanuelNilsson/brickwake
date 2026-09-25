@@ -13,7 +13,9 @@ export const validateShip = (spec: ShipSpec, ship: GeneratedShip): ReadonlyArray
   const loose = parts.flatMap((p, i) => (seen[i] === 1 ? [] : [`${p.part}@${p.x},${p.y},${p.z}`]))
   if (loose.length > 0) issues.push(`${loose.length} parts not connected to the keel: ${loose.slice(0, 12).join(" ")}`)
 
-  const occupied = new Set(parts.flatMap(occupiedCells).map((c) => c.join(",")))
+  const gunPart = spec.gun.parts[0]?.part
+  // Ports must be clear of everything but their own guns.
+  const occupied = new Set(parts.flatMap((p) => (p.part === gunPart ? [] : occupiedCells(p))).map((c) => c.join(",")))
   const courseTops = new Set(spec.courses.reduce<Array<number>>((tops, c) => [...tops, (tops[tops.length - 1] ?? 0) + (c === "brick" ? 3 : 1)], [0]))
   for (const deck of spec.guns.decks) {
     const halfBeam = deck.halfBeam / gridMetres.stud
@@ -32,8 +34,12 @@ export const validateShip = (spec: ShipSpec, ship: GeneratedShip): ReadonlyArray
         for (let y = port.y[0]; y < port.y[1]; y++) {
           for (let x = port.x[0]; x < port.x[1]; x++)
             for (let z = 0; z < halfBeam; z++) if (occupied.has(`${x},${y},${side > 0 ? z : -1 - z}`)) issues.push(`${deck.deck} port at x ${gx} m is blocked at ${x},${y}`)
-          for (const x of [port.x[0] - 1, port.x[1]]) if (!occupied.has(`${x},${y},${faceZ}`) || occupied.has(`${x},${y},${faceZ + side}`)) issues.push(`hull face beside the ${deck.deck} port at x ${gx} m is not at the gun half-beam`)
+          // The frame's jambs stand a stud proud; the hull face shows just outside them.
+          for (const x of [port.x[0] - 2, port.x[1] + 1]) if (!occupied.has(`${x},${y},${faceZ}`) || occupied.has(`${x},${y},${faceZ + side}`)) issues.push(`hull face beside the ${deck.deck} port at x ${gx} m is not at the gun half-beam`)
         }
+        const gunCell = `${port.x[0]},${port.y[0]},${side > 0 ? faceZ : -1 - faceZ}`
+        const armed = parts.some((p) => p.part === gunPart && occupiedCells(p).some((c) => c.join(",") === gunCell))
+        if (!armed) issues.push(`${deck.deck} port at x ${gx} m on the ${side > 0 ? "starboard" : "port"} side has no ${spec.gun.name}`)
       }
     }
   }
