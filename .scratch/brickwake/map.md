@@ -57,6 +57,7 @@ flowchart LR
 - [Client: sail a grey-box ship on the ocean](issues/03-client-sailing.md) — `src/client/game/`; render hooks + tick-queued event handlers; `window.brickwake` debug hook; 4.5 ms GPU at DPR-capped 1.5; MSAA half-float is half the GPU cost.
 - [Hull generator from ShipSpec](issues/09-hull-generator.md) — pure `src/sim/ship/` generator (3,665 parts, ~110 ms); hull alone renders 286.9k tris, 12 hulls 6.0–10.4 ms at DPR 1.5 — full ship needs distance LOD to fit budget; gun ports 2.8 m on stud grid.
 - [Client: firing, ball arcs and first-pass effects](issues/05-client-gunnery.md) — reticle on the sampled sea, tick-synced balls, pooled `game.effects` (flash, smoke, splash, chips); 4–9/12 hits at 150 m; debug hook `fireAt`/`orbit`.
+- [Match rules, sinking and HUD](issues/06-match-rules-and-hud.md) — `rules.ts` mode switches (TDM = new cases), ship `life`/`spawn`/kills on the wire, physical stern-first sinking, pirate HUD + hit indicator; `bun run shot c3` two-browser check; 257 B/ship.
 
 ## Not yet specified
 
