@@ -2,6 +2,7 @@ import { gunsOnSide, gunLayout, type BroadsideSide } from "./gun-layout.ts"
 import { aimGun, broadsideRefusal } from "./gunnery.ts"
 import type { BroadsideOrder, MatchState } from "./match.ts"
 import { nextRange, seedRng, type RngState } from "./rng.ts"
+import { allies } from "./rules.ts"
 import { sailTargetSpeed, shipAttitude, shipForwardSpeed, type RudderCommand, type ShipControls, type ShipId, type ShipState } from "./ship.ts"
 import { SIM_DT, tuning } from "./tuning.ts"
 import { angleOfDirection, directionFromAngle, vec3, wrapAngle, type Vec3 } from "./vector.ts"
@@ -58,13 +59,13 @@ const hashId = (id: string) => {
   return hash >>> 0
 }
 
-/** The enemy to fight: the nearest, kept while not much worse, and passed over when other bots already fight it. */
+/** The enemy to fight, never an ally: the nearest, kept while not much worse, and passed over when other bots already fight it. */
 const chooseTarget = (state: MatchState, self: ShipState, bot: Bot): ShipState | undefined => {
   const b = tuning.bots
   let best: ShipState | undefined
   let bestCost = Infinity
   for (const ship of state.ships) {
-    if (ship.id === self.id || !isAfloat(ship)) continue
+    if (ship.id === self.id || !isAfloat(ship) || allies(self, ship)) continue
     const hunters = state.bots.filter((other) => other.id !== bot.id && other.target === ship.id).length
     const cost = distance(self, ship) + b.crowdingPenalty * hunters - (ship.id === bot.target ? b.targetLoyalty : 0)
     if (cost < bestCost) {

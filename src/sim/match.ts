@@ -4,8 +4,21 @@ import { gunLayout, type BroadsideSide } from "./gun-layout.ts"
 import { ballId, broadsideRefusal, fireGun, traceBall, type BallId, type BroadsideRefusal, type Cannonball } from "./gunnery.ts"
 import type { SeaState } from "./ocean.ts"
 import { seedRng, type RngState } from "./rng.ts"
-import { ffaRules, openingPhase, scoreLimitReached, scoreSink, winnerOf, type MatchPhase, type MatchRules } from "./rules.ts"
-import { makeShip, shipId, stepShip, type ShipControls, type ShipId, type ShipState } from "./ship.ts"
+import {
+  allies,
+  ffaRules,
+  noTeamSinks,
+  openingPhase,
+  scoreLimitReached,
+  scoreSink,
+  teamFor,
+  teams,
+  winnerOf,
+  type MatchPhase,
+  type MatchRules,
+  type TeamSinks,
+} from "./rules.ts"
+import { makeShip, shipId, stepShip, type ShipControls, type ShipId, type ShipState, type Team } from "./ship.ts"
 import { SIM_DT, tuning } from "./tuning.ts"
 import type { Vec3 } from "./vector.ts"
 import { stepWind, type Wind } from "./wind.ts"
@@ -19,6 +32,8 @@ export interface MatchState {
   readonly sea: SeaState
   readonly wind: Wind
   readonly ships: ReadonlyArray<ShipState>
+  /** Sinks each side has scored; stays at zero in FFA. */
+  readonly teamSinks: TeamSinks
   /** Balls in flight. */
   readonly balls: ReadonlyArray<Cannonball>
   /** Guns of ordered broadsides still waiting for their turn in the ripple. */
@@ -93,15 +108,21 @@ export interface ShipSpawn {
   /** Yaw angle of the bow (see `directionFromAngle`). */
   readonly heading: number
   readonly controls?: ShipControls
+  /** The ship's TDM side; left out, the ship takes the side `joiningTeam` picks. */
+  readonly team?: Team
 }
 
 /** Sim time of a match state, seconds. */
 export const matchTime = (state: MatchState): number => state.tick * SIM_DT
 
+/** The TDM side the next ship to join takes; undefined in FFA. */
+export const joiningTeam = (state: MatchState): Team | undefined =>
+  teamFor(state.rules, state.ships, (id) => state.bots.some((bot) => bot.id === id))
+
 /** Adds a ship at rest on the water. */
 export const addShip = (state: MatchState, spawn: ShipSpawn): MatchState => ({
   ...state,
-  ships: [...state.ships, makeShip(spawn, state.sea, matchTime(state))],
+  ships: [...state.ships, makeShip({ ...spawn, team: spawn.team ?? joiningTeam(state) }, state.sea, matchTime(state))],
 })
 
 /** Takes a ship out of the match; unknown ids leave the state unchanged. */
@@ -113,8 +134,8 @@ export const removeShip = (state: MatchState, id: ShipId): MatchState => ({
 })
 
 /**
- * Tops the match up with bots to `fillTo` ships, or sends bots home (foundered ones first, then the newest)
- * while there are more ships than that. Call after every human joins or leaves.
+ * Tops the match up with bots to `fillTo` ships, or sends bots home (from the larger TDM side, foundered ones first,
+ * then the newest) while there are more ships than that. Call after every human joins or leaves. Bots take the side `joiningTeam` picks.
  */
 export const balanceBots = (state: MatchState, fillTo: number = tuning.bots.fillTo): MatchState => {
   let next = state
@@ -124,8 +145,12 @@ export const balanceBots = (state: MatchState, fillTo: number = tuning.bots.fill
     next = addShip({ ...next, rng, bots: [...next.bots, { id, skill, target: undefined }], botsJoined: next.botsJoined + 1 }, spawnPoint(next, id))
   }
   while (next.ships.length > fillTo && next.bots.length > 0) {
-    const lifeOf = (bot: Bot) => next.ships.find((ship) => ship.id === bot.id)?.life._tag
-    const leaving = next.bots.find((bot) => lifeOf(bot) !== "afloat") ?? next.bots[next.bots.length - 1]!
+    const shipOf = (bot: Bot) => next.ships.find((ship) => ship.id === bot.id)
+    const sides = teams.map((team) => next.ships.filter((ship) => ship.team === team).length)
+    const larger = sides[0] === sides[1] ? undefined : teams[sides[0]! > sides[1]! ? 0 : 1]
+    const onLarger = next.bots.filter((bot) => larger === undefined || shipOf(bot)?.team === larger)
+    const pool = onLarger.length > 0 ? onLarger : next.bots
+    const leaving = pool.find((bot) => shipOf(bot)?.life._tag !== "afloat") ?? pool[pool.length - 1]!
     next = removeShip(next, leaving.id)
   }
   return next
@@ -133,20 +158,24 @@ export const balanceBots = (state: MatchState, fillTo: number = tuning.bots.fill
 
 /**
  * Where a joining ship starts: the spawn-ring slot farthest from every ship already afloat, bow
- * across the base wind so setting sail gives a beam reach at once.
+ * across the base wind so setting sail gives a beam reach at once. A TDM side spawns on its own half of the ring.
  */
-export const spawnPoint = (state: MatchState, id: ShipId): ShipSpawn => {
+export const spawnPoint = (state: MatchState, id: ShipId, team: Team | undefined = joiningTeam(state)): ShipSpawn => {
   const { radius, slots } = tuning.match.spawnRing
+  const half = slots / 2
+  const first = team === "navy" ? half : 0
+  const count = team === undefined ? slots : half
   const clearance = (slot: number) => {
     const angle = (2 * Math.PI * slot) / slots
     const x = radius * Math.cos(angle)
     const z = radius * Math.sin(angle)
     return state.ships.reduce((nearest, ship) => Math.min(nearest, Math.hypot(ship.position.x - x, ship.position.z - z)), Infinity)
   }
-  let best = 0
-  for (let slot = 1; slot < slots; slot++) if (clearance(slot) > clearance(best)) best = slot
+  let best = first
+  for (let slot = first + 1; slot < first + count; slot++) if (clearance(slot) > clearance(best)) best = slot
   const angle = (2 * Math.PI * best) / slots
-  return { id, x: radius * Math.cos(angle), z: radius * Math.sin(angle), heading: state.wind.baseToward + Math.PI / 2 }
+  const spawn = { id, x: radius * Math.cos(angle), z: radius * Math.sin(angle), heading: state.wind.baseToward + Math.PI / 2 }
+  return team === undefined ? spawn : { ...spawn, team }
 }
 
 /** A match at tick 0, in warmup or, when `rules` has none, in play. Rules default to FFA quick play. */
@@ -165,6 +194,7 @@ export const createMatch = (options: {
     sea: options.sea,
     wind: options.wind,
     ships: [],
+    teamSinks: noTeamSinks,
     balls: [],
     pendingShots: [],
     nextBallId: 1,
@@ -180,13 +210,15 @@ const gunsBySide = {
 }
 
 const isAfloat = (ship: ShipState) => ship.life._tag === "afloat"
+const unscored = { kills: 0, deaths: 0, shots: 0, hits: 0, damage: 0 } as const
 const isAbove = (ship: ShipState) => ship.life._tag !== "sunk"
 
-/** The ship back on the spawn ring at `time`, clear of every ship still above water, keeping its score. */
+/** The ship back on the spawn ring at `time`, clear of every ship still above water, keeping its side and score. */
 const respawn = (state: MatchState, ships: ReadonlyArray<ShipState>, ship: ShipState, time: number): ShipState => {
   const clear = ships.filter((other) => other.id !== ship.id && isAbove(other))
-  const fresh = makeShip(spawnPoint({ ...state, ships: clear }, ship.id), state.sea, time)
-  return { ...fresh, spawn: ship.spawn + 1, kills: ship.kills, deaths: ship.deaths }
+  const fresh = makeShip(spawnPoint({ ...state, ships: clear }, ship.id, ship.team), state.sea, time)
+  const { kills, deaths, shots, hits, damage } = ship
+  return { ...fresh, spawn: ship.spawn + 1, kills, deaths, shots, hits, damage }
 }
 
 /**
@@ -203,6 +235,7 @@ export const stepMatch = (
   const end = start + SIM_DT
   const events: Array<MatchEvent> = []
   let pending: Array<PendingShot> = [...state.pendingShots]
+  let teamSinks = state.teamSinks
   const gunsManned = state.phase._tag !== "ended"
   const helms = new Map(inputs)
   const broadsides = new Map(orders)
@@ -240,7 +273,7 @@ export const stepMatch = (
     if (!ship) continue
     const fired = fireGun({ ship, shipTime: start, gun: shot.gun, aimPoint: shot.aimPoint, at: shot.at, id: ballId(nextBallId++), rng })
     rng = fired.rng
-    ships = ships.with(index, fired.ship)
+    ships = ships.with(index, { ...fired.ship, shots: fired.ship.shots + 1 })
     balls.push(fired.ball)
     events.push({ _tag: "cannonFired", tick: state.tick, ball: fired.ball })
   }
@@ -267,7 +300,9 @@ export const stepMatch = (
     }
     const index = moved.findIndex((ship) => ship.id === outcome.target)
     const target = moved[index]!
-    const hp = isAfloat(target) ? Math.max(0, target.hp - tuning.damage.perBall) : target.hp
+    const shooter = moved.findIndex((ship) => ship.id === ball.shooter)
+    const friendly = shooter >= 0 && allies(moved[shooter]!, target)
+    const hp = isAfloat(target) && !friendly ? Math.max(0, target.hp - tuning.damage.perBall) : target.hp
     events.push({
       _tag: "ballHit",
       tick: state.tick,
@@ -280,6 +315,10 @@ export const stepMatch = (
       damage: target.hp - hp,
       hp,
     })
+    if (shooter >= 0 && hp < target.hp) {
+      const credited = moved[shooter]!
+      moved = moved.with(shooter, { ...credited, hits: credited.hits + 1, damage: credited.damage + target.hp - hp })
+    }
     if (hp > 0 || !isAfloat(target)) {
       moved = moved.with(index, { ...target, hp })
       continue
@@ -290,7 +329,7 @@ export const stepMatch = (
     pending = pending.filter((shot) => shot.shipId !== target.id)
     const by = moved.some((ship) => ship.id === ball.shooter) ? ball.shooter : undefined
     events.push({ _tag: "shipSunk", tick: state.tick, time: outcome.time, shipId: target.id, by })
-    if (state.phase._tag === "playing") moved = scoreSink(state.rules, moved, target.id, by)
+    if (state.phase._tag === "playing") ({ ships: moved, teamSinks } = scoreSink(state.rules, { ships: moved, teamSinks }, target.id, by))
   }
 
   const { seconds: sinkSeconds, respawnSeconds } = tuning.sinking
@@ -312,21 +351,23 @@ export const stepMatch = (
     case "warmup":
       if (end < phase.endsAt) break
       phase = { _tag: "playing", endsAt: end + state.rules.timeLimit }
-      moved = moved.map((ship) => ({ ...ship, kills: 0, deaths: 0, hp: isAfloat(ship) ? tuning.damage.hullHp : ship.hp }))
+      moved = moved.map((ship) => ({ ...ship, ...unscored, hp: isAfloat(ship) ? tuning.damage.hullHp : ship.hp }))
+      teamSinks = noTeamSinks
       break
     case "playing":
-      if (end < phase.endsAt && !scoreLimitReached(state.rules, moved)) break
-      phase = { _tag: "ended", restartAt: end + state.rules.endedSeconds, winner: winnerOf(state.rules, moved) }
+      if (end < phase.endsAt && !scoreLimitReached(state.rules, { ships: moved, teamSinks })) break
+      phase = { _tag: "ended", restartAt: end + state.rules.endedSeconds, winner: winnerOf(state.rules, { ships: moved, teamSinks }) }
       break
     case "ended": {
       if (end < phase.restartAt) break
       phase = openingPhase(state.rules, end)
       const placed: Array<ShipState> = []
       for (const ship of moved) {
-        placed.push({ ...respawn(state, placed, ship, end), kills: 0, deaths: 0 })
+        placed.push({ ...respawn(state, placed, ship, end), ...unscored })
         events.push({ _tag: "shipRespawned", tick: state.tick, shipId: ship.id })
       }
       moved = placed
+      teamSinks = noTeamSinks
       live = []
       pending = []
       break
@@ -343,6 +384,7 @@ export const stepMatch = (
       sea: state.sea,
       wind,
       ships: moved,
+      teamSinks,
       balls: live,
       pendingShots: pending,
       nextBallId,

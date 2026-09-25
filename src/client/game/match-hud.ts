@@ -1,4 +1,4 @@
-import type { MatchPhaseSnapshot, ServerEvent } from "../../protocol/messages.ts"
+import type { MatchPhaseSnapshot, ServerEvent, ShipSnapshot } from "../../protocol/messages.ts"
 import type { MatchRules } from "../../sim/rules.ts"
 import { tuning } from "../../sim/tuning.ts"
 import { shipName } from "./names.ts"
@@ -9,6 +9,10 @@ const markup = /* html */ `
     <div class="mh-phase" data-mh="phase"></div>
     <div class="mh-time" data-mh="time">0:00</div>
     <div class="mh-standing" data-mh="standing"></div>
+    <div class="mh-teams" data-mh="teams" hidden>
+      <span data-team="pirates"><i>☠</i> Pirates <b data-mh="pirates">0</b></span>
+      <span data-team="navy"><b data-mh="navy">0</b> Navy <i>⚓</i></span>
+    </div>
   </div>
   <div class="mh-feed" data-mh="feed"></div>
   <div class="mh-banner" data-mh="banner" hidden>
@@ -18,8 +22,13 @@ const markup = /* html */ `
   <div class="mh-board" data-mh="board" hidden>
     <div class="mh-board-verdict" data-mh="verdict"></div>
     <div class="mh-board-title" data-mh="board-title"></div>
+    <div class="mh-board-score" data-mh="board-score" hidden>
+      <span data-team="pirates"><i>☠</i> Pirates <b data-mh="board-pirates">0</b></span>
+      <span class="mh-board-dash">–</span>
+      <span data-team="navy"><b data-mh="board-navy">0</b> Navy <i>⚓</i></span>
+    </div>
     <table>
-      <thead><tr><th></th><th class="mh-name">Ship</th><th>Sinks</th><th>Sunk</th></tr></thead>
+      <thead><tr><th></th><th class="mh-name">Ship</th><th>Sinks</th><th>Sunk</th><th>Hits</th><th>Aim</th><th>Damage</th></tr></thead>
       <tbody data-mh="rows"></tbody>
     </table>
     <div class="mh-board-foot" data-mh="board-foot"></div>
@@ -42,6 +51,8 @@ export interface MatchReading {
   renderTime: number
   rules: MatchRules
   phase: MatchPhaseSnapshot
+  /** Sinks each TDM side has scored. */
+  teamSinks: { readonly pirates: number; readonly navy: number }
   ownId: string
   own: ShipPose | undefined
   /** Every ship's id and pose at the render time. */
@@ -55,8 +66,10 @@ export interface MatchHudText {
   readonly standing: string
   /** Title · subtitle of the centre banner, or "" when none shows. */
   readonly banner: string
-  /** The scoreboard when it shows: the verdict at a match's end ("" before) and the number of rows. */
-  readonly scoreboard: { readonly verdict: string; readonly rows: number } | null
+  /** The scoreboard when it shows: the verdict at a match's end ("" before), title, footer and the number of ship rows. */
+  readonly scoreboard: { readonly verdict: string; readonly title: string; readonly foot: string; readonly rows: number } | null
+  /** TDM side scores under the clock as "pirates–navy"; "" in FFA. */
+  readonly teams: string
   /** Kill-feed lines, newest first. */
   readonly feed: ReadonlyArray<string>
 }
@@ -86,10 +99,18 @@ const startBannerSeconds = 2.2
 /** Scoreboard rebuilds per second while it shows. */
 const boardHz = 4
 
+type Team = NonNullable<ShipSnapshot["team"]>
+
+const teamNames: Readonly<Record<Team, string>> = { pirates: "Pirates", navy: "Navy" }
+
 interface Standing {
   readonly id: string
+  readonly team: Team | null
   readonly kills: number
   readonly deaths: number
+  readonly shots: number
+  readonly hits: number
+  readonly damage: number
 }
 
 /**
@@ -110,6 +131,12 @@ export class MatchHud {
   readonly #boardTitle: HTMLElement
   readonly #rows: HTMLElement
   readonly #boardFoot: HTMLElement
+  readonly #teams: HTMLElement
+  readonly #pirates: HTMLElement
+  readonly #navy: HTMLElement
+  readonly #boardScore: HTMLElement
+  readonly #boardPirates: HTMLElement
+  readonly #boardNavy: HTMLElement
   readonly #hull: HTMLElement
   readonly #hullValue: HTMLElement
   readonly #port: HTMLElement
@@ -119,6 +146,8 @@ export class MatchHud {
   #boardClock = 0
   #standingsKey = ""
   #ownId = ""
+  /** Each ship's TDM side as last drawn, for kill-feed colours. */
+  readonly #teamOf = new Map<string, Team | null>()
   #sunkBy = new Map<string, string | null>()
   #playingSince = Number.NaN
   #lastPhase: MatchPhaseSnapshot["_tag"] | undefined
@@ -138,6 +167,12 @@ export class MatchHud {
     this.#boardTitle = find(root, "board-title")
     this.#rows = find(root, "rows")
     this.#boardFoot = find(root, "board-foot")
+    this.#teams = find(root, "teams")
+    this.#pirates = find(root, "pirates")
+    this.#navy = find(root, "navy")
+    this.#boardScore = find(root, "board-score")
+    this.#boardPirates = find(root, "board-pirates")
+    this.#boardNavy = find(root, "board-navy")
     this.#hull = find(root, "hull")
     this.#hullValue = find(root, "hull-value")
     this.#port = find(root, "port")
@@ -160,7 +195,15 @@ export class MatchHud {
       clock: this.#time.textContent ?? "",
       standing: this.#standing.textContent ?? "",
       banner: this.#banner.hidden ? "" : `${this.#bannerTitle.textContent} · ${this.#bannerSub.textContent}`,
-      scoreboard: this.#board.hidden ? null : { verdict: this.#verdict.textContent ?? "", rows: this.#rows.childElementCount },
+      scoreboard: this.#board.hidden
+        ? null
+        : {
+            verdict: this.#verdict.textContent ?? "",
+            title: this.#boardTitle.textContent ?? "",
+            foot: this.#boardFoot.textContent ?? "",
+            rows: this.#rows.querySelectorAll("tr.mh-row").length,
+          },
+      teams: this.#teams.hidden ? "" : `${this.#pirates.textContent}–${this.#navy.textContent}`,
       feed: [...this.#feed.children].map((line) => line.textContent ?? ""),
     }
   }
@@ -182,6 +225,12 @@ export class MatchHud {
   update(reading: MatchReading): void {
     this.#ownId = reading.ownId
     const { phase, renderTime, rules, own } = reading
+    const tdm = rules.mode === "tdm"
+    if (this.#teams.hidden === tdm) this.#teams.hidden = !tdm
+    if (tdm) {
+      text(this.#pirates, String(reading.teamSinks.pirates))
+      text(this.#navy, String(reading.teamSinks.navy))
+    }
     if (phase._tag === "playing" && this.#lastPhase === "warmup") this.#playingSince = renderTime
     this.#lastPhase = phase._tag
 
@@ -191,7 +240,7 @@ export class MatchHud {
         text(this.#time, clock(phase.endsAt - renderTime))
         break
       case "playing":
-        text(this.#phase, `First to ${rules.scoreLimit}`)
+        text(this.#phase, tdm ? `First side to ${rules.scoreLimit}` : `First to ${rules.scoreLimit}`)
         text(this.#time, clock(phase.endsAt - renderTime))
         break
       case "ended":
@@ -252,7 +301,8 @@ export class MatchHud {
       sub = `Battle begins in ${Math.max(1, Math.ceil(phase.endsAt - renderTime))}`
     } else if (phase._tag === "playing" && renderTime - this.#playingSince < startBannerSeconds) {
       title = "Battle begins"
-      sub = `First to ${reading.rules.scoreLimit} sinks`
+      const team = own?.team
+      sub = team ? `Sail with the ${teamNames[team]} · first side to ${reading.rules.scoreLimit} sinks` : `First to ${reading.rules.scoreLimit} sinks`
     }
     this.#banner.hidden = title === ""
     this.#banner.dataset.tone = tone
@@ -262,50 +312,89 @@ export class MatchHud {
 
   #updateStandings(reading: MatchReading, showBoard: boolean) {
     const standings: Array<Standing> = []
-    for (const [id, entry] of reading.ships) standings.push({ id, kills: entry.view.pose.kills, deaths: entry.view.pose.deaths })
-    standings.sort((a, b) => b.kills - a.kills || a.deaths - b.deaths || (a.id < b.id ? -1 : 1))
-    const place = standings.findIndex((s) => s.id === reading.ownId) + 1
-    const mine = standings[place - 1]
+    for (const [id, entry] of reading.ships) {
+      const { team, kills, deaths, shots, hits, damage } = entry.view.pose
+      standings.push({ id, team, kills, deaths, shots, hits, damage })
+      this.#teamOf.set(id, team)
+    }
+    standings.sort((a, b) => b.kills - a.kills || a.deaths - b.deaths || b.damage - a.damage || (a.id < b.id ? -1 : 1))
+    const mine = standings.find((s) => s.id === reading.ownId)
+    const { phase, rules, teamSinks } = reading
+    const tdm = rules.mode === "tdm"
+    const side = mine?.team ?? null
+    const mates = side === null ? standings : standings.filter((s) => s.team === side)
+    const place = mates.findIndex((s) => s.id === reading.ownId) + 1
     text(
       this.#standing,
-      mine === undefined || reading.phase._tag === "warmup" ? "" : `${mine.kills} ${mine.kills === 1 ? "sink" : "sinks"} · ${ordinal(place)} of ${standings.length}`,
+      mine === undefined
+        ? ""
+        : phase._tag === "warmup"
+          ? side === null ? "" : `You sail with the ${teamNames[side]}`
+          : `${side === null ? "" : `${teamNames[side]} · `}${mine.kills} ${mine.kills === 1 ? "sink" : "sinks"} · ${ordinal(place)} of ${mates.length}`,
     )
     if (!showBoard) return
-    const { phase, rules } = reading
-    text(this.#boardTitle, `Free for all · first to ${rules.scoreLimit} sinks`)
+    text(this.#boardTitle, tdm ? `Pirates vs Navy · first side to ${rules.scoreLimit} sinks` : `Free for all · first to ${rules.scoreLimit} sinks`)
+    this.#boardScore.hidden = !tdm
+    text(this.#boardPirates, String(teamSinks.pirates))
+    text(this.#boardNavy, String(teamSinks.navy))
+    this.#board.dataset.mode = rules.mode
     if (phase._tag === "ended") {
-      const winner = phase.winner?.shipId
-      this.#board.dataset.verdict = winner === undefined ? "draw" : winner === reading.ownId ? "victory" : "defeat"
-      text(this.#verdict, winner === undefined ? "Draw" : winner === reading.ownId ? "Victory" : "Defeat")
+      const winner = phase.winner
+      const won = winner === null ? undefined : winner._tag === "ship" ? winner.shipId === reading.ownId : winner.team === side
+      this.#board.dataset.verdict = won === undefined ? "draw" : won ? "victory" : "defeat"
+      text(this.#verdict, won === undefined ? "Draw" : won ? "Victory" : "Defeat")
       const top = standings[0]
-      text(
-        this.#boardFoot,
-        `${winner === undefined ? "No captain stands alone" : `${shipName(winner)} rules the waves${top ? ` with ${top.kills} ${top.kills === 1 ? "sink" : "sinks"}` : ""}`} · Next battle in ${Math.max(0, Math.ceil(phase.restartAt - reading.renderTime))}`,
-      )
+      const next = `Next battle in ${Math.max(0, Math.ceil(phase.restartAt - reading.renderTime))}`
+      const tally = (kills: number) => `${kills} ${kills === 1 ? "sink" : "sinks"}`
+      const story =
+        winner === null
+          ? tdm ? "Neither flag yields" : "No captain stands alone"
+          : winner._tag === "team"
+            ? `The ${teamNames[winner.team]} rule the waves${top ? ` · best captain ${shipName(top.id)}, ${tally(top.kills)}` : ""}`
+            : `${shipName(winner.shipId)} rules the waves${top ? ` with ${tally(top.kills)}` : ""}`
+      text(this.#boardFoot, `${story} · ${next}`)
     } else {
       this.#board.dataset.verdict = "none"
       text(this.#verdict, "")
       text(this.#boardFoot, phase._tag === "warmup" ? "Warmup · sinks count once battle begins" : `${clock(phase.endsAt - reading.renderTime)} left`)
     }
-    const key = standings.map((s) => `${s.id}:${s.kills}:${s.deaths}`).join("|")
+    const key = `${reading.ownId}/${standings.map((s) => `${s.id}:${s.team}:${s.kills}:${s.deaths}:${s.shots}:${s.hits}:${s.damage}`).join("|")}`
     if (key === this.#standingsKey) return
     this.#standingsKey = key
+    const row = (s: Standing, index: number) => {
+      const tr = document.createElement("tr")
+      tr.className = s.id === reading.ownId ? "mh-row mh-own" : "mh-row"
+      if (s.team !== null) tr.dataset.team = s.team
+      for (const [value, name] of [
+        [String(index + 1), ""],
+        [shipName(s.id), "mh-name"],
+        [String(s.kills), ""],
+        [String(s.deaths), ""],
+        [String(s.hits), ""],
+        [s.shots === 0 ? "–" : `${Math.round((100 * s.hits) / s.shots)}%`, ""],
+        [String(Math.round(s.damage)), ""],
+      ] as const) {
+        const cell = document.createElement("td")
+        cell.textContent = value
+        if (name !== "") cell.className = name
+        tr.append(cell)
+      }
+      return tr
+    }
+    if (!tdm) {
+      this.#rows.replaceChildren(...standings.map(row))
+      return
+    }
     this.#rows.replaceChildren(
-      ...standings.map((s, index) => {
-        const row = document.createElement("tr")
-        if (s.id === reading.ownId) row.className = "mh-own"
-        for (const [value, name] of [
-          [String(index + 1), ""],
-          [shipName(s.id), "mh-name"],
-          [String(s.kills), ""],
-          [String(s.deaths), ""],
-        ] as const) {
-          const cell = document.createElement("td")
-          cell.textContent = value
-          if (name !== "") cell.className = name
-          row.append(cell)
-        }
-        return row
+      ...(["pirates", "navy"] as const).flatMap((team) => {
+        const head = document.createElement("tr")
+        head.className = "mh-team-row"
+        head.dataset.team = team
+        const cell = document.createElement("td")
+        cell.colSpan = 7
+        cell.textContent = `${team === "pirates" ? "☠" : "⚓"} ${teamNames[team]} · ${teamSinks[team]} ${teamSinks[team] === 1 ? "sink" : "sinks"}`
+        head.append(cell)
+        return [head, ...standings.filter((s) => s.team === team).map(row)]
       }),
     )
   }
@@ -317,6 +406,8 @@ export class MatchHud {
       const span = document.createElement("span")
       span.textContent = shipName(id)
       span.className = id === this.#ownId ? "mh-you" : "mh-ship-name"
+      const team = this.#teamOf.get(id)
+      if (team) span.dataset.team = team
       return span
     }
     const mark = document.createElement("span")

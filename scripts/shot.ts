@@ -472,6 +472,107 @@ const scene = async (browser: Browser, url: string) => {
   ].join("\n")
 }
 
+/**
+ * Plays C8: the title screen with its mode choice, one click into Pirates vs Navy quick play with balanced bot sides,
+ * team HUD and scoreboard, the three team liveries at ref-01's camera, and a TDM skirmish won to the results screen.
+ */
+const tdm = async (browser: Browser, url: string) => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
+  await page.goto(url)
+  await page.waitForFunction(() => window.brickwake?.joined === true && window.brickwake.ships().length >= 6, undefined, { timeout: 15_000 })
+  await page.waitForTimeout(800)
+  check(await page.locator("#overlay .menu-mode").count() === 2, "the title screen offers two modes")
+  check((await matchOf(page)).rules.mode === "ffa", "the title screen's world is FFA quick play until a mode is chosen")
+  await page.screenshot({ path: ".shots/c8-menu.png" })
+
+  await page.locator('#overlay .menu-mode[data-mode="tdm"]').click()
+  check(await hook(page, (h) => h.sailing), "one click on Pirates vs Navy sets sail")
+  check(
+    await waitFor(page, (h) => h.match()?.rules.mode === "tdm" && h.ships().length >= 6 && h.ships().every((s) => s.team !== null && s.livery !== null), 8000),
+    "the click moves the captain into a TDM room",
+  )
+  const ships = await hook(page, (h) => h.ships())
+  const own = await ownShip(page)
+  const pirates = ships.filter((s) => s.team === "pirates")
+  const navy = ships.filter((s) => s.team === "navy")
+  check(pirates.length === navy.length, `sides are balanced (${pirates.length} pirates, ${navy.length} navy)`)
+  check(pirates.every((s) => s.livery === "pirate") && navy.every((s) => s.livery?.startsWith("navy-")), "pirates fly black, navy the Crown's sails")
+  check((await page.evaluate(() => localStorage.getItem("brickwake.mode"))) === "tdm", "the title screen remembers the mode")
+  await page.waitForFunction(() => window.brickwake?.match()?.phase._tag === "playing", undefined, { timeout: 15_000 })
+  await page.waitForTimeout(2500)
+  const hud = (await matchOf(page)).hud
+  check(hud.teams !== "" && hud.phase.startsWith("First side to"), `the clock shows side scores (${hud.teams}, ${hud.phase})`)
+  await page.evaluate((heading) => window.brickwake?.orbit(heading + 0.3, 0.12, 40), own.heading)
+  await page.waitForTimeout(400)
+  await page.screenshot({ path: ".shots/c8-tdm-hud.png" })
+  await page.keyboard.down("Tab")
+  await page.waitForTimeout(400)
+  const board = (await matchOf(page)).hud.scoreboard
+  check(board !== null && board.rows === ships.length && board.title.startsWith("Pirates vs Navy"), `Tab shows both sides (${JSON.stringify(board)})`)
+  await page.screenshot({ path: ".shots/c8-tdm-scoreboard.png" })
+  await page.keyboard.up("Tab")
+  await page.close()
+
+  // The team liveries at ref-01's camera, in the c5 scene: low off the starboard quarter, looking forward past the stern with the sun ahead to starboard.
+  const fleet = await browser.newPage({ viewport: { width: 1728, height: 1117 }, deviceScaleFactor: 2 })
+  await fleet.goto(`${url}?scenario=armada&orbit=140`)
+  await fleet.waitForFunction(() => window.brickwake?.joined === true && window.brickwake.ships().length >= 12, undefined, { timeout: 20_000 })
+  await fleet.mouse.click(864, 558)
+  await fleet.keyboard.press("KeyW")
+  await fleet.keyboard.press("KeyW")
+  await fleet.waitForTimeout(6000)
+  const heading = (await ownShip(fleet)).heading
+  for (const livery of ["pirate", "navy-lion", "navy-fleur"] as const) {
+    await fleet.evaluate((livery) => window.brickwake?.paintOwn(livery), livery)
+    await fleet.evaluate((heading) => window.brickwake?.orbit(heading + 0.3, 0.07, 30), heading)
+    await fleet.waitForTimeout(1200)
+    await fleet.screenshot({ path: `.shots/c8-sails-${livery}.png` })
+    await fleet.evaluate((heading) => window.brickwake?.orbit(heading + Math.PI + 0.6, 0.1, 42), heading)
+    await fleet.waitForTimeout(1200)
+    await fleet.screenshot({ path: `.shots/c8-sails-${livery}-bow.png` })
+  }
+  await fleet.close()
+
+  const skirmish = await browser.newPage({ viewport: { width: 1440, height: 900 } })
+  await skirmish.goto(`${url}?scenario=skirmish`)
+  await skirmish.waitForFunction(() => window.brickwake?.joined === true && window.brickwake.ships().length >= 6, undefined, { timeout: 15_000 })
+  check(await skirmish.locator("#overlay .menu-modes").isHidden(), "scenario pages hide the mode choice")
+  await skirmish.mouse.click(720, 450)
+  check(await hook(skirmish, (h) => h.sailing), "a click anywhere on the title screen sets sail")
+
+  const player = await ownShip(skirmish)
+  const dummy = await shipById(skirmish, "dummy")
+  let volleys = 0
+  while ((await matchOf(skirmish)).phase._tag !== "ended" && volleys < 4) {
+    await skirmish.waitForFunction(() => (window.brickwake?.aim()?.reloadLeft ?? 1) === 0, undefined, { timeout: 8000 })
+    const [self, target] = [await ownShip(skirmish), await shipById(skirmish, "dummy")]
+    await aimAtRange(skirmish, bearing(self.position, target.position), Math.hypot(target.position[0] - self.position[0], target.position[2] - self.position[2]))
+    const outcome = await hook(skirmish, (h) => h.fire())
+    check(outcome === "fired", `broadside ${volleys + 1} at the dummy fires (${outcome})`)
+    volleys++
+    await waitFor(skirmish, (h) => h.match()?.phase._tag === "ended", 4000)
+  }
+  const ended = await matchOf(skirmish)
+  check(ended.phase._tag === "ended" && ended.phase.winner?._tag === "team", `the skirmish ends with a side winning (${JSON.stringify(ended.phase)})`)
+  const winner = ended.phase._tag === "ended" && ended.phase.winner?._tag === "team" ? ended.phase.winner.team : null
+  await skirmish.waitForTimeout(700)
+  const results = (await matchOf(skirmish)).hud.scoreboard
+  const expected = winner === player.team ? "Victory" : "Defeat"
+  check(results?.verdict === expected, `the results read ${expected} for the ${player.team} (${results?.verdict}; ${results?.foot})`)
+  check(ended.teamSinks.pirates + ended.teamSinks.navy === 1, `one sink ends a skirmish to 1 (${JSON.stringify(ended.teamSinks)})`)
+  const stats = await ownShip(skirmish)
+  await skirmish.evaluate((yaw) => window.brickwake?.orbit(yaw, 0.1, 40), player.heading + 2)
+  await skirmish.waitForTimeout(500)
+  await skirmish.screenshot({ path: ".shots/c8-results.png" })
+  await skirmish.close()
+  return [
+    `menu → TDM in one click: ${pirates.length} pirates vs ${navy.length} navy; own ${own.team}; HUD ${hud.teams}`,
+    `skirmish: ${volleys} broadside(s) at the dummy ${Math.round(Math.hypot(dummy.position[0] - player.position[0], dummy.position[2] - player.position[2]))} m off; ${winner} won; results "${results?.verdict}" · ${results?.foot}`,
+    `own stats: ${stats.kills} sinks, ${stats.hits}/${stats.shots} hits, ${stats.damage} damage`,
+    "saved .shots/c8-{menu,tdm-hud,tdm-scoreboard,sails-{pirate,navy-lion,navy-fleur}{,-bow},results}.png",
+  ].join("\n")
+}
+
 const shipOrNull = (page: Page, id: string) => page.evaluate((id) => window.brickwake?.ships().find((s) => s.id === id) ?? null, id)
 
 const freePort = async () => {
@@ -507,7 +608,7 @@ Effect.gen(function* () {
     Effect.promise(() => chromium.launch({ args: ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist"] })),
     (browser) => Effect.promise(() => browser.close()),
   )
-  const checks = { c1: sail, c2: gunnery, c3: match, c4: bots, c5: scene }
+  const checks = { c1: sail, c2: gunnery, c3: match, c4: bots, c5: scene, c8: tdm }
   const wanted = process.argv.slice(2)
   for (const [name, run] of Object.entries(checks)) {
     if (wanted.length > 0 && !wanted.includes(name)) continue

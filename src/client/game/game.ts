@@ -1,7 +1,7 @@
 import { ACESFilmicToneMapping, Color, DirectionalLight, FogExp2, HemisphereLight, LinearSRGBColorSpace, PCFShadowMap, PerspectiveCamera, Scene, Vector2, Vector3, WebGLRenderer } from "three"
 import type { ScenarioName } from "../../sim/scenarios.ts"
 import type { ClientMessage, MatchPhaseSnapshot, ServerEvent, ServerMessage, WindSnapshot } from "../../protocol/messages.ts"
-import { ffaRules } from "../../sim/rules.ts"
+import { ffaRules, type MatchMode } from "../../sim/rules.ts"
 import { tuning } from "../../sim/tuning.ts"
 import { GameAudio } from "../audio/game-audio.ts"
 import { ChaseCamera } from "./chase-camera.ts"
@@ -21,7 +21,8 @@ import { RenderPipeline } from "./render-pipeline.ts"
 import { ShipView } from "./ship-view.ts"
 import { SinkingShips } from "./sinking.ts"
 import { createGameSky, type GameSky } from "./sky.ts"
-import { EventQueue, SnapshotTimeline } from "./timeline.ts"
+import { EventQueue, type ShipPose, SnapshotTimeline } from "./timeline.ts"
+import { shipLivery } from "./names.ts"
 import { WakeField, wakePeriod } from "./wake.ts"
 
 /** What every render-loop hook sees for one frame. One object, rewritten each frame. */
@@ -50,6 +51,16 @@ export interface GameElements {
   readonly match: HTMLElement
   /** Hit-direction arcs around the reticle. */
   readonly hits: HTMLElement
+}
+
+/** Where the title screen remembers the last quick-play mode chosen. */
+export const modeKey = "brickwake.mode"
+
+/** A ship in play: its pooled view, the frame it was last seen, and the team its sails were printed for. */
+interface ShipEntry {
+  readonly view: ShipView
+  seen: number
+  livery: { readonly team: ShipPose["team"]; readonly name: string } | undefined
 }
 
 /** A low sunset sun, 5° up, and the colour its light reaches the sea with (linear HDR). */
@@ -85,9 +96,9 @@ export class Game {
   readonly #connection: Connection
   readonly #frame: FrameContext = { dt: 0, renderTime: 0, renderTick: 0 }
   readonly #stats: FrameStats
-  readonly #ships = new Map<string, { readonly view: ShipView; seen: number }>()
+  readonly #ships = new Map<string, ShipEntry>()
   readonly #appliedEvents: Array<ServerEvent> = []
-  readonly #sweep = (entry: { readonly view: ShipView; seen: number }, id: string) => {
+  readonly #sweep = (entry: ShipEntry, id: string) => {
     if (entry.seen === this.#frameCount) return
     this.scene.remove(entry.view.group)
     this.#spareViews.push(entry.view)
@@ -123,6 +134,8 @@ export class Game {
 
   readonly canvas: HTMLCanvasElement
   readonly #orbit: number
+  readonly #scenario: ScenarioName | undefined
+  #mode: MatchMode
   readonly elements: GameElements
 
   constructor(
@@ -131,6 +144,8 @@ export class Game {
     options: {
       readonly scenario: ScenarioName | undefined
       readonly room: string | undefined
+      /** Quick-play mode to join at load; the title screen can switch it. Scenario rooms bring their own rules. */
+      readonly mode: MatchMode
       readonly pixelRatio: number
       readonly orbit: number
       /** MSAA samples of the scene target. */
@@ -142,6 +157,9 @@ export class Game {
     this.canvas = canvas
     this.elements = elements
     this.#orbit = options.orbit
+    this.#mode = options.mode
+    this.#scenario = options.scenario
+    elements.overlay.dataset.mode = options.scenario === undefined ? options.mode : "scenario"
     this.renderer = new WebGLRenderer({ canvas, antialias: false, powerPreference: "high-performance" })
     this.renderer.setPixelRatio(options.pixelRatio)
     this.renderer.toneMapping = ACESFilmicToneMapping
@@ -153,7 +171,16 @@ export class Game {
     this.#stats = new FrameStats(this.renderer)
     this.#hud = new Hud(elements.hud)
     this.#matchHud = new MatchHud(elements.match)
-    this.#matchReading = { dt: 0, renderTime: 0, rules: ffaRules, phase: this.#phase, ownId: "", own: undefined, ships: this.#ships }
+    this.#matchReading = {
+      dt: 0,
+      renderTime: 0,
+      rules: ffaRules,
+      phase: this.#phase,
+      teamSinks: { pirates: 0, navy: 0 },
+      ownId: "",
+      own: undefined,
+      ships: this.#ships,
+    }
     this.#hitIndicator = new HitIndicator(elements.hits)
 
     this.#sky = createGameSky(this.renderer, sunDirection)
@@ -208,7 +235,11 @@ export class Game {
     this.eventHandlers.push((event) => this.#onMatchEvent(event))
 
     window.addEventListener("resize", () => this.#resize())
-    elements.overlay.addEventListener("click", () => this.#setSail())
+    elements.overlay.addEventListener("click", (event) => {
+      const choice = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-mode]")?.dataset.mode : undefined
+      if (choice === "ffa" || choice === "tdm") this.#chooseMode(choice)
+      this.#setSail()
+    })
     canvas.addEventListener("click", () => this.#lockPointer())
     document.addEventListener("pointerlockchange", () => {
       this.elements.status.dataset.pointer = document.pointerLockElement === canvas ? "locked" : "free"
@@ -219,10 +250,10 @@ export class Game {
         this.#status("joining")
         const join: ClientMessage =
           options.scenario === undefined
-            ? { _tag: "join", mode: "ffa" }
+            ? { _tag: "join", mode: this.#mode }
             : options.room === undefined
-              ? { _tag: "join", mode: "ffa", scenario: options.scenario }
-              : { _tag: "join", mode: "ffa", scenario: options.scenario, room: options.room }
+              ? { _tag: "join", mode: this.#mode, scenario: options.scenario }
+              : { _tag: "join", mode: this.#mode, scenario: options.scenario, room: options.room }
         this.#connection.send(join)
       },
       onMessage: (message, arrival) => this.#receive(message, arrival),
@@ -235,6 +266,13 @@ export class Game {
       shipId: () => this.#shipId,
       timeline: () => this.#timeline,
       pose: (id) => this.#ships.get(id)?.view.pose,
+      livery: (id) => this.#ships.get(id)?.livery?.name,
+      paintOwn: (livery) => {
+        const own = this.#ships.get(this.#shipId ?? "")
+        if (own === undefined) return
+        own.view.rig.setLivery(livery)
+        own.livery = { team: own.view.pose.team, name: livery.name }
+      },
       shipIds: () => [...this.#ships.keys()],
       camera: () => this.#camera,
       helm: () => this.#controls?.helm,
@@ -257,6 +295,16 @@ export class Game {
     this.elements.overlay.dataset.state = text
   }
 
+  /** Moves to a quick-play room of `mode` when it differs from the one joined; the next welcome swaps the world. */
+  #chooseMode(mode: MatchMode) {
+    if (this.#scenario !== undefined || mode === this.#mode) return
+    this.#mode = mode
+    this.elements.overlay.dataset.mode = mode
+    localStorage.setItem(modeKey, mode)
+    this.#connection.send({ _tag: "leave" })
+    this.#connection.send({ _tag: "join", mode })
+  }
+
   #setSail() {
     this.#sailing = true
     //this.audio.start()
@@ -277,6 +325,7 @@ export class Game {
         this.#shipId = message.shipId
         this.#wind = message.wind
         this.#matchReading.rules = message.rules
+        this.#matchReading.teamSinks = message.teamSinks
         this.#phase = message.phase
         this.#timeline = new SnapshotTimeline(message.simHz)
         this.#timeline.push(message.tick, message.ships, arrival)
@@ -302,6 +351,7 @@ export class Game {
       case "snapshot": {
         this.#wind = message.wind
         this.#phase = message.phase
+        this.#matchReading.teamSinks = message.teamSinks
         this.#timeline?.push(message.tick, message.ships, arrival)
         this.#events.push(message.events)
         return
@@ -402,7 +452,7 @@ export class Game {
       if (id === undefined) continue
       let entry = this.#ships.get(id)
       if (entry === undefined) {
-        entry = { view: this.#spareViews.pop() ?? new ShipView(id, this.#galleon), seen: 0 }
+        entry = { view: this.#spareViews.pop() ?? new ShipView(id, this.#galleon), seen: 0, livery: undefined }
         entry.view.group.name = `ship ${id}`
         this.#ships.set(id, entry)
         this.scene.add(entry.view.group)
@@ -410,6 +460,12 @@ export class Game {
       entry.seen = this.#frameCount
       const pose = entry.view.pose
       if (timeline.sample(id, pose)) {
+        const livery = entry.livery
+        if (livery === undefined || livery.team !== pose.team) {
+          const print = shipLivery(id, pose.team)
+          entry.view.rig.setLivery(print)
+          entry.livery = { team: pose.team, name: print.name }
+        }
         entry.view.update(pose, windX, windZ, dt, camera.camera, viewportHeight)
         entry.view.group.visible = this.#sinking.update(id, pose, dt, renderTime, ocean.sea, camera)
         if (pose.life === "afloat") {

@@ -20,6 +20,10 @@ const ship = (x: number, yaw: number): ShipSnapshot => ({
   spawn: 1,
   kills: 0,
   deaths: 0,
+  shots: 0,
+  hits: 0,
+  damage: 0,
+  team: null,
 })
 
 describe("SnapshotTimeline", () => {

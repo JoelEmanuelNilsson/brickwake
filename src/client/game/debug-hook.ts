@@ -1,6 +1,7 @@
 import { Vector3 } from "three"
 import type { ServerEvent } from "../../protocol/messages.ts"
 import type { AudioStats, GameAudio } from "../audio/game-audio.ts"
+import { navyFleurLivery, navyLionLivery, pirateLivery, type SailLivery } from "../rig/sail-livery.ts"
 import { sampleOcean, type SeaState } from "../../sim/ocean.ts"
 import { angleOfDirection, rotate, vec3, type Quat } from "../../sim/vector.ts"
 import type { ChaseCamera } from "./chase-camera.ts"
@@ -35,12 +36,19 @@ export interface DebugShip {
   readonly deaths: number
   /** Changes on each respawn or restart. */
   readonly spawn: number
+  readonly team: ShipPose["team"]
+  readonly shots: number
+  readonly hits: number
+  readonly damage: number
+  /** Name of the livery its sails fly, or null before it is drawn. */
+  readonly livery: string | null
 }
 
 /** The match as the client shows it. */
 export interface DebugMatch {
   readonly phase: MatchReading["phase"]
   readonly rules: MatchReading["rules"]
+  readonly teamSinks: MatchReading["teamSinks"]
   /** Sim time drawn now; compare with the phase's times. */
   readonly renderTime: number
   readonly hud: MatchHudText
@@ -106,6 +114,8 @@ export interface BrickwakeDebug {
   fireAt(point: readonly [number, number, number]): FireOutcome
   /** Test control: sets the camera orbit as mouse and wheel do; `yaw` is the view direction (see `directionFromAngle`). */
   orbit(yaw: number, pitch: number, distance?: number): void
+  /** Test control: prints the own ship's sails with a team livery until its team changes, for livery screenshots. */
+  paintOwn(livery: "pirate" | "navy-lion" | "navy-fleur"): void
   /** Test control: renders `frames` frames of the live game back to back and times them. */
   measure(frames: number): FrameMeasure
 }
@@ -123,6 +133,8 @@ export interface DebugSource {
   readonly shipId: () => string | null
   readonly timeline: () => SnapshotTimeline | undefined
   readonly pose: (id: string) => ShipPose | undefined
+  readonly livery: (id: string) => string | undefined
+  readonly paintOwn: (livery: SailLivery) => void
   readonly shipIds: () => ReadonlyArray<string>
   readonly camera: () => ChaseCamera | undefined
   readonly helm: () => HelmRequest | undefined
@@ -137,7 +149,7 @@ export interface DebugSource {
   readonly measure: (frames: number) => FrameMeasure
 }
 
-const describeShip = (id: string, pose: ShipPose, sea: SeaState | undefined, time: number): DebugShip => {
+const describeShip = (id: string, pose: ShipPose, livery: string | undefined, sea: SeaState | undefined, time: number): DebugShip => {
   const q: Quat = { x: pose.qx, y: pose.qy, z: pose.qz, w: pose.qw }
   const forward = rotate(q, vec3(1, 0, 0))
   const starboard = rotate(q, vec3(0, 0, 1))
@@ -160,6 +172,11 @@ const describeShip = (id: string, pose: ShipPose, sea: SeaState | undefined, tim
     kills: pose.kills,
     deaths: pose.deaths,
     spawn: pose.spawn,
+    team: pose.team,
+    shots: pose.shots,
+    hits: pose.hits,
+    damage: pose.damage,
+    livery: livery ?? null,
   }
 }
 
@@ -167,7 +184,7 @@ const describeShip = (id: string, pose: ShipPose, sea: SeaState | undefined, tim
 export const installDebugHook = (source: DebugSource): void => {
   const ship = (id: string) => {
     const pose = source.pose(id)
-    return pose === undefined ? null : describeShip(id, pose, source.sea(), source.timeline()?.renderTime ?? 0)
+    return pose === undefined ? null : describeShip(id, pose, source.livery(id), source.sea(), source.timeline()?.renderTime ?? 0)
   }
   const hook: BrickwakeDebug = {
     get connection() {
@@ -214,11 +231,12 @@ export const installDebugHook = (source: DebugSource): void => {
     match: () => {
       if (source.shipId() === null) return null
       const reading = source.match()
-      return { phase: reading.phase, rules: reading.rules, renderTime: reading.renderTime, hud: source.matchHud().shown() }
+      return { phase: reading.phase, rules: reading.rules, teamSinks: reading.teamSinks, renderTime: reading.renderTime, hud: source.matchHud().shown() }
     },
     fire: () => source.gunnery().fire(),
     fireAt: ([x, y, z]) => source.gunnery().fire({ x, y, z }),
     measure: (frames) => source.measure(frames),
+    paintOwn: (name) => source.paintOwn(name === "pirate" ? pirateLivery : name === "navy-lion" ? navyLionLivery : navyFleurLivery),
     orbit: (yaw, pitch, distance) => {
       const chase = source.camera()
       if (chase === undefined) return
