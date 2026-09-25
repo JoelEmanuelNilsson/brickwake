@@ -9,7 +9,8 @@
     "shot": "bun scripts/shot.ts",
     "shot:lab": "bun scripts/shot-lab.ts",
     "shot:galleon": "bun scripts/shot-galleon.ts",
-    "shot:audio": "bun scripts/shot-audio.ts"
+    "shot:audio": "bun scripts/shot-audio.ts",
+    "shot:damage": "bun scripts/shot-damage.ts"
   },
   "dependencies": {
     "@effect/platform-bun": "4.0.0-rc.115",

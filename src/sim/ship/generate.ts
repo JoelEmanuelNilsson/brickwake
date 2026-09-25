@@ -1,3 +1,4 @@
+import { ShipAir } from "./air.ts"
 import type { Assembly } from "./assemblies.ts"
 import type { BrickColor } from "./colors.ts"
 import type { PartId } from "./parts.ts"
@@ -16,6 +17,8 @@ export interface GeneratedShip {
   readonly openings: ReadonlyArray<readonly [number, number, number]>
   /** Parts dropped because no joint placement could attach them to the keel. */
   readonly pruned: number
+  /** Parts from this index on are the rig: mast steps, masts, yards and crow's nests. */
+  readonly rigFrom: number
 }
 
 /** One gunport opening on the grid. */
@@ -605,6 +608,12 @@ export const generateShip = (spec: ShipSpec): GeneratedShip => {
   const all = [...mottled, ...rig]
   const seen = reachable(all.length, connectParts(all), keelParts(all))
   const attached = all.filter((_, i) => seen[i] === 1)
-  const edges = connectParts(attached)
-  return { parts: attached, edges, keel: keelParts(attached), ports, openings, pruned: all.length - attached.length }
+  const rigFrom = attached.length - rig.filter((_, i) => seen[mottled.length + i] === 1).length
+  // Paint is outside only: hull parts the outside cannot reach (ports sealed) are bare timber, as in ref-04's gun
+  // deck, so a breach shows broken wood against the painted hull instead of black on black.
+  const hullPaint = new Set(spec.strakes.flatMap((s) => [s.color, ...(s.mottle ?? []).map((m) => m.color)]))
+  const air = new ShipAir(attached, openings)
+  const finished = attached.map((p, i): ShipPart => (i < rigFrom && hullPaint.has(p.color) && air.partLevel(i) < 2 ? { ...p, color: pickMottle(spec.deckColor, spec.deckMottle, hash(p.x, p.y, p.z, 11)) } : p))
+  const edges = connectParts(finished)
+  return { parts: finished, edges, keel: keelParts(finished), ports, openings, pruned: all.length - attached.length, rigFrom }
 }

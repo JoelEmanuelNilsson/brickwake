@@ -1,4 +1,4 @@
-import { type BufferGeometry, Color, Group, InstancedMesh, MathUtils, Matrix4, MeshStandardMaterial, type PerspectiveCamera, Vector3 } from "three"
+import { Box3, type BufferGeometry, Color, Group, InstancedMesh, MathUtils, Matrix4, MeshStandardMaterial, type PerspectiveCamera, Sphere, Vector3 } from "three"
 import type { BrickColor } from "../../sim/ship/colors.ts"
 import { brickColors } from "./colors.ts"
 import { metresPerLdu, type PartId, partCatalog } from "../../sim/ship/parts.ts"
@@ -13,6 +13,8 @@ export interface BrickPlacement {
   readonly hiddenStuds?: ReadonlyArray<number>
   /** Seen from outside only through openings in the hull; far detail leaves it out. */
   readonly interior?: boolean
+  /** Enclosed: not drawn until `reveal` shows it, when a hole opens onto it. */
+  readonly hidden?: boolean
 }
 
 /** A dark box that fills a hull opening at far detail, where the interior behind it is left out; it goes when `owner` is removed. */
@@ -231,8 +233,9 @@ class Layer {
     return true
   }
 
-  finish(): void {
-    for (const pool of this.pools.values()) pool.mesh.computeBoundingSphere()
+  /** Bound every pool by the whole ship, so instances revealed later are never culled. */
+  finish(bounds: Box3): void {
+    for (const pool of this.pools.values()) pool.mesh.boundingSphere = bounds.getBoundingSphere(new Sphere())
   }
 
   count(): number {
@@ -257,7 +260,8 @@ class Layer {
 /**
  * A ship's parts as one InstancedMesh per part shape plus one for studs, all under `root`, at three levels
  * of detail (`setDetail`, or `updateDetail` from the camera). Parts are addressed by their index in the
- * placement list; removal takes them out of every level in O(1) and never rebuilds.
+ * placement list; removal takes them out of every level in O(1) and never rebuilds. Pools are sized for every
+ * part at every level, so revealing a hidden part only writes its instances.
  */
 export class BrickShipMesh {
   readonly root = new Group()
@@ -270,6 +274,8 @@ export class BrickShipMesh {
   private readonly plugOwners: ReadonlyArray<number>
   private readonly studStart: Int32Array
   private readonly placements: ReadonlyArray<BrickPlacement>
+  private readonly flats: ReadonlyArray<{ readonly key: string; readonly scale: readonly [number, number, number] }>
+  private readonly presence: Uint8Array
   private present: number
   private level: BrickDetail = "near"
   private chosen = false
@@ -294,12 +300,12 @@ export class BrickShipMesh {
     const flatCount = new Map<string, number>()
     const innerCount = new Map<string, number>()
     const flatGeometry = new Map<string, BufferGeometry>()
-    const flats = placements.map((placement) => {
+    this.flats = placements.map((placement) => {
       nearCount.set(placement.part, (nearCount.get(placement.part) ?? 0) + 1)
       const flat = library.flat(placement.part)
       flatGeometry.set(flat.key, flat.geometry)
-      const counts = placement.interior === true ? innerCount : flatCount
-      counts.set(flat.key, (counts.get(flat.key) ?? 0) + 1)
+      flatCount.set(flat.key, (flatCount.get(flat.key) ?? 0) + 1)
+      if (placement.interior === true || placement.hidden === true) innerCount.set(flat.key, (innerCount.get(flat.key) ?? 0) + 1)
       return flat
     })
     for (const [part, capacity] of nearCount) this.near.pool(part, library.geometry(part), library.plastic, capacity, `part ${part}`)
@@ -312,29 +318,28 @@ export class BrickShipMesh {
     this.midStuds.pool("studs", library.flatStudGeometry, library.plastic, studCount)
     this.plugs.pool("plug", library.flat("3005").geometry, library.plastic, plugs.length)
 
+    const bounds = new Box3()
+    this.presence = new Uint8Array(placements.length).fill(1)
     placements.forEach((placement, i) => {
-      const color = linear(placement.color)
-      this.near.add(i, placement.part, placement.matrix, color, false)
-      const flat = flats[i]
-      if (flat !== undefined) {
-        const [sx, sy, sz] = flat.scale
-        scratchMatrix.multiplyMatrices(placement.matrix, scratchScale.makeScale(sx, sy, sz))
-        ;(placement.interior === true ? this.flatInner : this.flatOuter).add(i, flat.key, scratchMatrix, color, false)
-      }
+      bounds.expandByPoint(scratchPosition.setFromMatrixPosition(placement.matrix))
+      if (placement.hidden === true) return
+      this.showPart(i, placement.interior === true, false)
       const hidden = placement.hiddenStuds ?? []
       const count = partCatalog[placement.part].studs.length
       for (let s = 0; s < count; s++) if (!hidden.includes(s)) this.showStud(i, s, false)
     })
     plugs.forEach((plug, i) => this.plugs.add(i, "plug", plug.matrix, plugColor, false))
     this.present = placements.length
+    // Part origins sit on a corner or face; a metre covers the rest of the largest part.
+    bounds.expandByScalar(1)
     for (const layer of this.layers()) {
-      layer.finish()
+      layer.finish(bounds)
       this.root.add(layer.group)
     }
     this.setDetail("near")
   }
 
-  /** Number of parts not yet removed. */
+  /** Number of parts not yet removed, drawn or hidden. */
   get partCount(): number {
     return this.present
   }
@@ -369,12 +374,29 @@ export class BrickShipMesh {
   }
 
   isPresent(index: number): boolean {
+    return this.presence[index] === 1
+  }
+
+  /** Whether a present part is drawn: false while it is still `hidden`. */
+  isShown(index: number): boolean {
     return this.near.has(index)
+  }
+
+  /** Draw a present part from now on: `interior` keeps it out of far detail. Moves an interior part outside; never back. */
+  reveal(index: number, interior: boolean): void {
+    if (!this.isPresent(index)) return
+    if (!this.near.has(index)) this.showPart(index, interior, true)
+    else if (!interior && this.flatInner.has(index)) {
+      this.flatInner.remove(index)
+      this.addFlat(this.flatOuter, index, true)
+    }
   }
 
   /** Remove a part, its studs and any plug it owns; returns false if it was already gone. */
   remove(index: number): boolean {
-    if (!this.near.remove(index)) return false
+    if (!this.isPresent(index)) return false
+    this.presence[index] = 0
+    this.near.remove(index)
     this.flatOuter.remove(index)
     this.flatInner.remove(index)
     const start = this.studStart[index] ?? 0
@@ -387,9 +409,9 @@ export class BrickShipMesh {
     return true
   }
 
-  /** Show or hide one stud of a present part, e.g. when the part covering it falls off. */
+  /** Show or hide one stud of a drawn part, e.g. when the part covering it falls off. */
   setStudVisible(index: number, stud: number, visible: boolean): void {
-    if (!this.isPresent(index)) return
+    if (!this.isShown(index)) return
     const key = (this.studStart[index] ?? 0) + stud
     if (key >= (this.studStart[index + 1] ?? 0)) return
     if (visible && !this.nearStuds.has(key)) this.showStud(index, stud, true)
@@ -401,7 +423,7 @@ export class BrickShipMesh {
     const into = { draws: 0, triangles: 0 }
     const layers = detail === "near" ? [this.near, this.nearStuds] : detail === "mid" ? [this.flatOuter, this.flatInner, this.midStuds] : [this.flatOuter, this.plugs]
     for (const layer of layers) layer.addStats(into)
-    const parts = detail === "far" ? this.flatOuter.count() : this.present
+    const parts = detail === "far" ? this.flatOuter.count() : this.near.count()
     const studs = detail === "near" ? this.nearStuds.count() : detail === "mid" ? this.midStuds.count() : 0
     return { parts, studs, ...into }
   }
@@ -414,6 +436,22 @@ export class BrickShipMesh {
 
   private layers(): ReadonlyArray<Layer> {
     return [this.near, this.nearStuds, this.flatOuter, this.flatInner, this.midStuds, this.plugs]
+  }
+
+  private showPart(index: number, interior: boolean, upload: boolean) {
+    const placement = this.placements[index]
+    if (placement === undefined) return
+    this.near.add(index, placement.part, placement.matrix, linear(placement.color), upload)
+    this.addFlat(interior ? this.flatInner : this.flatOuter, index, upload)
+  }
+
+  private addFlat(layer: Layer, index: number, upload: boolean) {
+    const placement = this.placements[index]
+    const flat = this.flats[index]
+    if (placement === undefined || flat === undefined) return
+    const [sx, sy, sz] = flat.scale
+    scratchMatrix.multiplyMatrices(placement.matrix, scratchScale.makeScale(sx, sy, sz))
+    layer.add(index, flat.key, scratchMatrix, linear(placement.color), upload)
   }
 
   private showStud(index: number, stud: number, upload: boolean) {

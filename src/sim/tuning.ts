@@ -158,6 +158,11 @@ export const tuning = {
     hullHp: 100,
     /** HP one ball takes off the hull it hits. */
     perBall: 5,
+    /** HP a ball takes when it strikes the upper works (rails, castles, rig), and when it meets no brick (the sails). */
+    upperWorksPerBall: 2,
+    sailsPerBall: 1,
+    /** Bricks a ball knocks out: those within `radius` m of its path over the first `depth` m from the impact, nearest first, at most the cap of the zone it struck. */
+    bricks: { radius: 0.5, depth: 0.9, hullCap: 12, upperWorksCap: 6 },
   },
   sinking: {
     /** Seconds from HP 0 until the ship is under and out of play; it takes no orders and cannot be hit meanwhile. */

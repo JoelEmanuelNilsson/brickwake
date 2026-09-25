@@ -6,6 +6,7 @@ import {
   PCFShadowMap,
   PerspectiveCamera,
   PMREMGenerator,
+  Raycaster,
   Scene,
   Vector2,
   Vector3,
@@ -16,7 +17,14 @@ import { OutputPass } from "three/addons/postprocessing/OutputPass.js"
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js"
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { type BrickDetail, type BrickShipStats, BrickShipMesh, createBrickLibrary } from "../bricks/brick-ship-mesh.ts"
+import { nextRange, seedRng } from "../../sim/rng.ts"
+import { buildDamageGraph, type DamageZone, hitDamage, ShipDamage } from "../../sim/ship/damage.ts"
 import { generateShip } from "../../sim/ship/generate.ts"
+import { tuning } from "../../sim/tuning.ts"
+import type { Vec3 } from "../../sim/vector.ts"
+import { brickColors } from "../bricks/colors.ts"
+import { removeAndReveal } from "../bricks/ship-wreck.ts"
+import { ChipLayer, chipSpawn } from "../game/debris.ts"
 import { partIds } from "../../sim/ship/parts.ts"
 import { rigLayout } from "../../sim/ship/rig.ts"
 import { galleonSpec } from "../../sim/ship/spec.ts"
@@ -48,6 +56,8 @@ export const galleonCameras = {
   guns: { position: [-7, 2.2, 9.5], target: [2, 2.4, 3.8], fov: 50 },
   rig: { position: [-34, 7, 30], target: [1.5, 9.5, 0], fov: 45 },
   "rig-bow": { position: [36, 5, 26], target: [0, 9.5, 0], fov: 45 },
+  // Port quarter, the side the key light falls on, where the lab's volleys land; the low sun stays out of frame.
+  damage: { position: [-15, 4.5, -19], target: [1, 2, 0], fov: 50 },
   // On the ref-01 line at the near→mid and mid→far switch distances for a 900 px tall viewport.
   "lod-mid": { position: [-35.4, 5.3, 23.9], target: [2, 2.4, -1], fov: 45 },
   "lod-far": { position: [-111, 11.2, 74.3], target: [2, 2.4, -1], fov: 45 },
@@ -85,8 +95,29 @@ export interface BrickLabHook {
   setCamera(name: string): void
   /** Remove parts by index and report how long the removals took. */
   remove(indices: ReadonlyArray<number>): { readonly removed: number; readonly ms: number }
+  /** Hull HP of the lab galleon after the hits so far. */
+  readonly hp: number
+  /** Fire one ball at the ship along the camera ray through normalised device coordinates; the zone struck, if any. */
+  fire(ndcX: number, ndcY: number): DamageZone | undefined
+  /**
+   * Fire seeded groups of balls at the port side from the beam, as broadsides land, until HP is at or below
+   * `hp`; per-hit costs in ms for the damage rules (`sim`) and the mesh update with reveals (`view`).
+   */
+  volley(hp: number, seed: number): LabVolley
   /** Render `frames` frames back to back, each waited on until the GPU is done; frame times in ms. */
   measure(frames: number): { readonly median: number; readonly p90: number; readonly pipelined: number; readonly width: number; readonly height: number }
+}
+
+/** What a scripted volley did to the lab galleon. */
+export interface LabVolley {
+  readonly hits: number
+  readonly zones: Readonly<Record<DamageZone, number>>
+  readonly removed: number
+  readonly detached: number
+  readonly revealed: number
+  readonly maxLoss: number
+  readonly sim: { readonly median: number; readonly max: number }
+  readonly view: { readonly median: number; readonly max: number }
 }
 
 declare global {
@@ -147,8 +178,13 @@ const galleon = params.get("ship") === "galleon"
 const cameras: Readonly<Record<string, CameraPreset>> = galleon ? galleonCameras : samplerCameras
 const fleet = galleon ? Math.max(1, Number(params.get("fleet") ?? 1)) : 1
 const generateStart = performance.now()
-const built = galleon ? shipPlacements(galleonSpec, generateShip(galleonSpec)) : { placements: buildSampler(), plugs: [] }
+const generated = galleon ? generateShip(galleonSpec) : undefined
+const built = generated === undefined ? { placements: buildSampler(), plugs: [], air: undefined } : shipPlacements(galleonSpec, generated)
 const generateMs = performance.now() - generateStart
+const graphStart = performance.now()
+const damage = generated === undefined ? undefined : new ShipDamage(buildDamageGraph(galleonSpec, generated))
+const graphMs = performance.now() - graphStart
+let hp: number = tuning.damage.hullHp
 const buildStart = performance.now()
 const ship = new BrickShipMesh(library, built.placements, built.plugs)
 const buildMs = performance.now() - buildStart
@@ -246,11 +282,51 @@ const fullStats = (s: BrickShipMesh, detail: BrickDetail = s.detail): BrickShipS
   return { ...hull, draws: hull.draws + r.draws, triangles: hull.triangles + r.triangles }
 }
 
+// Knocked-out parts fly on with the ball; parts cut off from the keel drop. Ticket 15 replaces these boxes.
+const debris = new ChipLayer(2048)
+scene.add(debris.mesh)
+const spawn = chipSpawn()
+const throwParts = (parts: ReadonlyArray<number>, direction: Vec3, speed: number) => {
+  const boxes = damage?.graph.boxes
+  if (boxes === undefined) return
+  for (const i of parts) {
+    const placement = ship.parts[i]
+    if (placement === undefined) continue
+    const o = i * 6
+    const [x0, y0, z0, x1, y1, z1] = [boxes[o] ?? 0, boxes[o + 1] ?? 0, boxes[o + 2] ?? 0, boxes[o + 3] ?? 0, boxes[o + 4] ?? 0, boxes[o + 5] ?? 0]
+    Object.assign(spawn, { x: (x0 + x1) / 2, y: (y0 + y1) / 2, z: (z0 + z1) / 2, sx: x1 - x0, sy: y1 - y0, sz: z1 - z0, life: 4 })
+    const scatter = speed * 0.35
+    spawn.vx = direction.x * speed + (Math.random() - 0.5) * scatter
+    spawn.vy = direction.y * speed + Math.random() * scatter
+    spawn.vz = direction.z * speed + (Math.random() - 0.5) * scatter
+    spawn.color.setHex(brickColors[placement.color].srgb)
+    debris.throw(spawn)
+  }
+}
+
+/** Fire one ball along a ship-local ray: the damage rules pick the parts, the mesh drops them and shows what they uncover. */
+const fireRay = (origin: Vec3, direction: Vec3) => {
+  if (damage === undefined || built.air === undefined) return undefined
+  const distance = damage.firstPartAlong(origin, direction, 500)
+  if (distance === undefined) return undefined
+  const point = { x: origin.x + direction.x * distance, y: origin.y + direction.y * distance, z: origin.z + direction.z * distance }
+  const simStart = performance.now()
+  const hit = damage.hit(point, direction)
+  const sim = performance.now() - simStart
+  const viewStart = performance.now()
+  const revealed = removeAndReveal(ship, built.air, [...hit.removed, ...hit.detached])
+  const view = performance.now() - viewStart
+  hp = Math.max(0, hp - hitDamage(hit.zone))
+  throwParts(hit.removed, direction, 7)
+  throwParts(hit.detached, direction, 1.5)
+  return { hit, revealed, sim, view }
+}
+
 const showStats = () => {
   updateDetail()
   const { parts, studs, draws, triangles } = fullStats(ship)
   const total = ships.reduce((sum, s) => sum + fullStats(s).triangles, 0)
-  statsPanel.textContent = `ship lab · ${cameraName}${fleet > 1 ? ` · ${fleet} ships, ${(total / 1e6).toFixed(2)}M tris` : ""}\n${partIds.length} shapes · ${parts} parts · ${studs} studs · ${ship.detail}\n${draws} draws · ${(triangles / 1000).toFixed(1)}k tris · generate ${generateMs.toFixed(1)} ms · build ${buildMs.toFixed(1)} ms`
+  statsPanel.textContent = `ship lab · ${cameraName}${fleet > 1 ? ` · ${fleet} ships, ${(total / 1e6).toFixed(2)}M tris` : ""}\n${partIds.length} shapes · ${parts} parts · ${studs} studs · ${ship.detail}\n${draws} draws · ${(triangles / 1000).toFixed(1)}k tris · generate ${generateMs.toFixed(1)} ms · build ${buildMs.toFixed(1)} ms${damage === undefined ? "" : `\nHP ${hp} · graph ${graphMs.toFixed(1)} ms · click to fire`}`
 }
 showStats()
 
@@ -260,9 +336,22 @@ const render = () => {
   const dt = Math.min((now - last) / 1000, 0.1)
   last = now
   for (const r of rigs.values()) r.update(dt, wind.x, wind.z)
+  debris.update(Math.min(dt, 0.05), now / 1000, undefined)
   updateDetail()
   composer.render()
 }
+
+const raycaster = new Raycaster()
+const fireAt = (ndcX: number, ndcY: number) => {
+  raycaster.setFromCamera(new Vector2(ndcX, ndcY), camera)
+  const zone = fireRay(raycaster.ray.origin, raycaster.ray.direction)?.hit.zone
+  showStats()
+  return zone
+}
+canvas.addEventListener("click", (event) => {
+  const rect = canvas.getBoundingClientRect()
+  fireAt(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1)
+})
 
 let frames = 0
 renderer.setAnimationLoop(() => {
@@ -305,6 +394,48 @@ window.brickLab = {
     const ms = performance.now() - start
     showStats()
     return { removed, ms }
+  },
+  get hp() {
+    return hp
+  },
+  fire: fireAt,
+  volley: (target, seed) => {
+    let rng = seedRng(seed)
+    const zones: Record<DamageZone, number> = { hull: 0, upperWorks: 0, sails: 0 }
+    const sims: Array<number> = []
+    const views: Array<number> = []
+    let [removed, detached, revealed, maxLoss] = [0, 0, 0, 0]
+    let aim = { x: 0, y: 0, slant: 0 }
+    for (let tries = 0; hp > target && tries < 1000; tries++) {
+      // Four-ball groups aimed at a point on the port side from off the beam, a little fore or aft; each ball lands
+      // within the 1° spread cone around the aim, ±2.6 m at 150 m.
+      if (tries % 4 === 0) {
+        const [x, afterX] = nextRange(rng, -11, 11)
+        const [y, afterY] = nextRange(afterX, 0.8, 4.5)
+        const [slant, next] = nextRange(afterY, -0.25, 0.25)
+        aim = { x, y, slant }
+        rng = next
+      }
+      const [dx, afterDx] = nextRange(rng, -2.6, 2.6)
+      const [dy, next] = nextRange(afterDx, -1.3, 1.3)
+      rng = next
+      const length = Math.hypot(aim.slant, 0.03, 1)
+      const result = fireRay({ x: aim.x + dx - aim.slant * 30, y: aim.y + dy + 0.03 * 30, z: -30 }, { x: aim.slant / length, y: -0.03 / length, z: 1 / length })
+      if (result === undefined) continue
+      zones[result.hit.zone]++
+      removed += result.hit.removed.length
+      detached += result.hit.detached.length
+      revealed += result.revealed
+      maxLoss = Math.max(maxLoss, result.hit.removed.length + result.hit.detached.length)
+      sims.push(result.sim)
+      views.push(result.view)
+    }
+    showStats()
+    const summary = (values: Array<number>) => {
+      values.sort((a, b) => a - b)
+      return { median: values[values.length >> 1] ?? 0, max: values[values.length - 1] ?? 0 }
+    }
+    return { hits: sims.length, zones, removed, detached, revealed, maxLoss, sim: summary(sims), view: summary(views) }
   },
   measure: (count) => {
     renderer.setAnimationLoop(null)
