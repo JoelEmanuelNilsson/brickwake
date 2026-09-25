@@ -20,6 +20,7 @@ import { FrameStats } from "./frame-stats.ts"
 import { Gunnery, type HullAlong } from "./gunnery.ts"
 import { HitIndicator } from "./hit-indicator.ts"
 import { Hud, type HudReading } from "./hud.ts"
+import { HudFeel } from "./hud-feel.ts"
 import { MatchHud, type MatchReading } from "./match-hud.ts"
 import { OceanSurface } from "./ocean.ts"
 import { Reticle } from "./reticle.ts"
@@ -63,6 +64,8 @@ export interface GameElements {
   readonly pause: HTMLElement
   readonly settings: HTMLElement
   readonly hint: HTMLElement
+  /** Full-screen edge glows and flashes the HUD feels the battle with. */
+  readonly feel: HTMLElement
 }
 
 /** Where the title screen remembers the last quick-play mode chosen. */
@@ -131,6 +134,7 @@ export class Game {
   readonly #hud: Hud
   readonly #matchHud: MatchHud
   readonly #hitIndicator: HitIndicator
+  readonly #feel: HudFeel
   readonly #fires: ShipFires
   readonly #sinking: SinkingShips
   readonly #debris: BrickDebris
@@ -234,6 +238,7 @@ export class Game {
       ships: this.#ships,
     }
     this.#hitIndicator = new HitIndicator(elements.hits)
+    this.#feel = new HudFeel(elements.feel, [elements.hud, this.#matchHud.shipPanel, elements.hits], elements.reticle)
 
     this.#sky = createGameSky(this.renderer, sunDirection)
     this.scene.fog = new FogExp2(0, fogDensity)
@@ -480,6 +485,7 @@ export class Game {
         const crest = message.sea.waves.reduce((sum, wave) => sum + wave.amplitude, 0)
         const camera = this.#camera ?? new ChaseCamera(crest + cameraClearance)
         this.#camera = camera
+        camera.onShake = (amount) => this.#feel.jolt(amount)
         camera.sensitivity = this.#settings.sensitivity
         const own = message.ships.find((ship) => ship.id === message.shipId)
         if (own !== undefined) {
@@ -513,6 +519,7 @@ export class Game {
     this.#matchHud.onEvent(event)
     if (event._tag === "shipRespawned" && event.shipId === this.#shipId) this.#controls?.syncSail(0)
     if (event._tag === "sailHit") this.#ships.get(event.target)?.view.punchSail(...event.localPoint)
+    this.#feelEvent(event)
     if (event._tag !== "ballHit" || event.target !== this.#shipId) return
     const own = this.#ships.get(event.target)?.view.pose
     const shooter = this.#ships.get(event.shooter)?.view.pose
@@ -521,6 +528,33 @@ export class Game {
     const fromX = shooter === undefined ? x - (own?.x ?? x) : shooter.x - (own?.x ?? 0)
     const fromZ = shooter === undefined ? z - (own?.z ?? z) : shooter.z - (own?.z ?? 0)
     this.#hitIndicator.hit(Math.atan2(-fromZ, fromX))
+  }
+
+  /** The HUD feels the battle: a flash for a nearby blast, the red edge when the own ship is struck, a glint as its guns fire. */
+  #feelEvent(event: ServerEvent) {
+    const eye = this.#camera?.camera.position
+    if (eye === undefined) return
+    switch (event._tag) {
+      case "cannonFired":
+        if (event.shooter === this.#shipId) this.#feel.blast(0.035)
+        return
+      case "ballHit": {
+        const [x, y, z] = event.point
+        this.#feel.blast(0.22 / (1 + (Math.hypot(x - eye.x, y - eye.y, z - eye.z) / 35) ** 2))
+        if (event.target === this.#shipId && event.damage > 0) this.#feel.struck(event.damage)
+        return
+      }
+      case "sailHit":
+        if (event.target === this.#shipId && event.damage > 0) this.#feel.struck(event.damage)
+        return
+      case "shipSunk": {
+        const pose = this.#ships.get(event.shipId)?.view.pose
+        if (pose !== undefined) this.#feel.blast(0.6 / (1 + (Math.hypot(pose.x - eye.x, pose.y - eye.y, pose.z - eye.z) / 80) ** 2))
+        return
+      }
+      default:
+        return
+    }
   }
 
   #resize() {
@@ -691,6 +725,8 @@ export class Game {
       this.#matchHud.visible = this.#sailing
     }
     this.#hitIndicator.update(dt, camera.yaw + Math.PI)
+    const ownPose = own?.view.pose
+    this.#feel.update(dt, ownPose !== undefined && ownPose.life === "afloat" && this.#sailing ? ownPose.fires.length : 0)
     this.effects.update(dt, renderTime, windX, windZ, ocean.sea, camera.camera)
     this.#debris.update(dt, renderTime, ocean.sea, camera.camera.position, windX, windZ)
     const lights = this.effects.flashLights
