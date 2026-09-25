@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Brickwake sound test</title>
+    <style>
+      body { margin: 0; padding: 24px 32px; background: #0f1a1f; color: #f4e6d0; font: 14px/1.5 ui-sans-serif, system-ui, sans-serif; }
+      h1 { font: 600 20px/1.2 ui-serif, Georgia, serif; margin: 0 0 4px; }
+      p { margin: 0 0 16px; color: #c7b79d; }
+      section { margin: 0 0 18px; }
+      h2 { font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: #d6a85a; margin: 0 0 8px; }
+      button { background: #2a3a40; color: #f4e6d0; border: 1px solid #4b6068; border-radius: 4px; padding: 6px 12px; margin: 0 6px 6px 0; font: inherit; cursor: pointer; }
+      button:hover { background: #36505a; }
+      button[aria-pressed="true"] { background: #7a5424; border-color: #d6a85a; }
+      label { display: inline-flex; align-items: center; gap: 8px; margin: 0 18px 8px 0; }
+      input[type="range"] { width: 160px; }
+      output { min-width: 4ch; font-variant-numeric: tabular-nums; }
+      #meter { width: 420px; height: 12px; background: #1c2a30; border: 1px solid #4b6068; position: relative; }
+      #meter div { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, #3d8a5a 0 70%, #d6a85a 70% 88%, #c0452e 88%); }
+      #stats { font: 12px/1.4 ui-monospace, monospace; color: #9fb0a8; white-space: pre; }
+    </style>
+  </head>
+  <body>
+    <h1>Brickwake sound test</h1>
+    <p>Every game sound, synthesized in code and played through the game's own mixer. Click anything to start audio. The listener faces ahead.</p>
+    <section>
+      <h2>Where</h2>
+      <label>Distance <input id="distance" type="range" min="5" max="600" value="40" /> <output for="distance"></output> m</label>
+      <label>Bearing <input id="bearing" type="range" min="-180" max="180" value="60" /> <output for="bearing"></output>°</label>
+      <label>Volume <input id="volume" type="range" min="0" max="100" /> <output for="volume"></output></label>
+    </section>
+    <section id="shots">
+      <h2>Events</h2>
+    </section>
+    <section>
+      <h2>Ambience</h2>
+      <button id="at-sea" aria-pressed="false">At sea</button>
+      <label>Wind <input id="wind" type="range" min="0" max="22" value="14" /> <output for="wind"></output> m/s</label>
+      <label>Sail <input id="sail" type="range" min="0" max="100" value="100" /> <output for="sail"></output> %</label>
+      <label>Speed <input id="speed" type="range" min="0" max="14" value="9" /> <output for="speed"></output> m/s</label>
+      <label>Roll (hull creaks) <input id="roll" type="range" min="0" max="15" value="6" /> <output for="roll"></output>°</label>
+    </section>
+    <section>
+      <h2>Output</h2>
+      <div id="meter"><div></div></div>
+      <div id="stats"></div>
+    </section>
+    <script type="module" src="/src/client/audio/sound-test.ts"></script>
+  </body>
+</html>

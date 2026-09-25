@@ -1,5 +1,6 @@
 import { Vector3 } from "three"
 import type { ServerEvent } from "../../protocol/messages.ts"
+import type { AudioStats, GameAudio } from "../audio/game-audio.ts"
 import { sampleOcean, type SeaState } from "../../sim/ocean.ts"
 import { angleOfDirection, rotate, vec3, type Quat } from "../../sim/vector.ts"
 import type { ChaseCamera } from "./chase-camera.ts"
@@ -81,6 +82,8 @@ export interface BrickwakeDebug {
   /** Where the reticle aims on the drawn sea, the facing side, and whether it can fire. */
   aim(): AimReading | null
   effects(): DebugEffects
+  /** Sound: bank ready, context state, voices busy, sounds played, dropped and stolen. */
+  audio(): AudioStats
   match(): DebugMatch | null
   /** Test control: fires as a left click does (headless browsers refuse the pointer lock clicks need). */
   fire(): FireOutcome
@@ -111,6 +114,7 @@ export interface DebugSource {
   readonly sea: () => SeaState | undefined
   readonly gunnery: () => Gunnery
   readonly effects: () => Effects
+  readonly audio: () => GameAudio
   readonly match: () => MatchReading
   readonly matchHud: () => MatchHud
 }
@@ -188,6 +192,7 @@ export const installDebugHook = (source: DebugSource): void => {
       ballsInFlight: source.gunnery().balls.inFlight,
       shake: source.camera()?.trauma ?? 0,
     }),
+    audio: () => source.audio().stats(),
     match: () => {
       if (source.shipId() === null) return null
       const reading = source.match()

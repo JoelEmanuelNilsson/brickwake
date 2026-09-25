@@ -1,6 +1,7 @@
 import { Quaternion, Vector3 } from "three"
 import { oceanHeight, type SeaState } from "../../sim/ocean.ts"
 import { tuning } from "../../sim/tuning.ts"
+import type { GameAudio } from "../audio/game-audio.ts"
 import type { ChaseCamera } from "./chase-camera.ts"
 import type { Effects } from "./effects.ts"
 import type { ShipPose } from "./timeline.ts"
@@ -24,12 +25,14 @@ interface Wreck {
  */
 export class SinkingShips {
   readonly #effects: Effects
+  readonly #audio: GameAudio
   readonly #wrecks = new Map<string, Wreck>()
   readonly #q = new Quaternion()
   readonly #p = new Vector3()
 
-  constructor(effects: Effects) {
+  constructor(effects: Effects, audio: GameAudio) {
     this.#effects = effects
+    this.#audio = audio
   }
 
   /** Plays ship `id` at the render time; returns false when its hull should not be drawn. */
@@ -51,6 +54,7 @@ export class SinkingShips {
     if (!wreck.plunged && middle.y < oceanHeight(sea, middle.x, middle.z, renderTime) - 0.5) {
       wreck.plunged = true
       this.#effects.plunge(middle.x, oceanHeight(sea, middle.x, middle.z, renderTime), middle.z)
+      this.#audio.plunge(middle.x, middle.y, middle.z)
       this.#shake(camera, middle, 0.45, 60)
     }
     wreck.clock -= dt
@@ -70,7 +74,9 @@ export class SinkingShips {
       const point = this.#world(pose, local)
       this.#effects.hit(point.x, point.y - 1, point.z, 0, -1, 0)
     }
-    this.#shake(camera, this.#world(pose, deckPoints[2]!), 0.6, 70)
+    const middle = this.#world(pose, deckPoints[2]!)
+    this.#audio.sinking(middle.x, middle.y, middle.z)
+    this.#shake(camera, middle, 0.6, 70)
   }
 
   #world(pose: ShipPose, local: Vector3) {
