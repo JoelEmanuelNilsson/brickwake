@@ -140,7 +140,7 @@ const vertexShader = /* glsl */ `
     vCorner = turned;
     vColor = aColor;
     // Quads fade as the camera nears their plane, so flying through smoke never shows a flat wall.
-    vNear = smoothstep(0.5, 4.0 + size * 0.5, -mvPosition.z);
+    vNear = smoothstep(0.5, 4.0 + size, -mvPosition.z);
     #include <fog_vertex>
   }
 `
