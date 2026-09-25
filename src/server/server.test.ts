@@ -5,7 +5,7 @@ import { ballFromWire, ServerMessageJson, type ServerMessage } from "../protocol
 import { ballPositionAt } from "../sim/gunnery.ts"
 import { seas, swell } from "../sim/ocean.ts"
 import { dummyShipId, duelShipIds, scenarioShipId } from "../sim/scenarios.ts"
-import { SIM_HZ } from "../sim/tuning.ts"
+import { SIM_HZ, tuning } from "../sim/tuning.ts"
 import type { NetworkLag } from "./lag.ts"
 import * as Server from "./server.ts"
 
@@ -103,9 +103,11 @@ test("a joining client gets a welcome with the match sea, then a full snapshot e
   const rate = (window.length - 1) / (((window.at(-1)?.at ?? 0) - (window[0]?.at ?? 0)) / 1000)
   expect(rate).toBeGreaterThan(29)
   expect(rate).toBeLessThan(31)
-  const bytes = JSON.stringify(snapshots.at(-1)?.snapshot).length
-  expect(bytes).toBeLessThan(400)
-  console.log(`snapshots at ${rate.toFixed(2)} Hz, ${bytes} B with one ship`)
+  const last = snapshots.at(-1)!.snapshot
+  const bytes = JSON.stringify(last).length
+  expect(last.ships).toHaveLength(tuning.bots.fillTo)
+  expect(bytes / last.ships.length).toBeLessThan(400)
+  console.log(`snapshots at ${rate.toFixed(2)} Hz, ${bytes} B with ${last.ships.length} ships (one human, the rest bots)`)
   await client.close()
 })
 
@@ -180,15 +182,19 @@ test("invalid messages are rejected, the connection stays usable and the room ke
   await Promise.all([client.close(), bystander.close()])
 })
 
-test("quick play puts clients in one room; a leaver's ship goes and the others hear it", async () => {
+test("quick play puts clients in one room with bots filling it to six; a leaver's ship goes and a bot takes its place", async () => {
   const a = await connect(server.url)
   const b = await connect(server.url)
   a.send({ _tag: "join", mode: "ffa" })
   const welcomeA = await a.nextOf("welcome", 0)
   b.send({ _tag: "join", mode: "ffa" })
   const welcomeB = await b.nextOf("welcome", 0)
-  expect(welcomeB.ships.map((ship) => ship.id)).toEqual([welcomeA.shipId, welcomeB.shipId])
-  const [shipA, shipB] = welcomeB.ships
+  const isBot = (id: string) => id.startsWith("bot-")
+  expect(welcomeA.ships.map((ship) => ship.id).filter(isBot)).toHaveLength(tuning.bots.fillTo - 1)
+  expect(welcomeB.ships).toHaveLength(tuning.bots.fillTo)
+  expect(welcomeB.ships.map((ship) => ship.id).filter((id) => !isBot(id))).toEqual([welcomeA.shipId, welcomeB.shipId])
+  const shipA = welcomeB.ships.find((ship) => ship.id === welcomeA.shipId)
+  const shipB = welcomeB.ships.find((ship) => ship.id === welcomeB.shipId)
   expect(Math.hypot(shipA!.position[0] - shipB!.position[0], shipA!.position[2] - shipB!.position[2])).toBeGreaterThan(100)
 
   const from = a.received.length
@@ -198,7 +204,8 @@ test("quick play puts clients in one room; a leaver's ship goes and the others h
     from,
   )
   expect(left.events).toContainEqual({ _tag: "shipLeft", tick: expect.any(Number), shipId: welcomeB.shipId })
-  expect(left.ships.map((ship) => ship.id)).toEqual([welcomeA.shipId])
+  expect(left.ships.map((ship) => ship.id).filter((id) => !isBot(id))).toEqual([welcomeA.shipId])
+  expect(left.ships).toHaveLength(tuning.bots.fillTo)
 
   a.send({ _tag: "leave" })
   await sleep(100)
@@ -206,7 +213,8 @@ test("quick play puts clients in one room; a leaver's ship goes and the others h
   await sleep(200)
   expect(a.received.length).toBe(quiet)
   a.send({ _tag: "join", mode: "ffa" })
-  expect((await a.nextOf("welcome")).ships.length).toBe(1)
+  const fresh = await a.nextOf("welcome")
+  expect(fresh.ships.map((ship) => ship.id).filter((id) => !isBot(id))).toEqual([fresh.shipId])
   await a.close()
 })
 

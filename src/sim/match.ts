@@ -1,10 +1,11 @@
+import { decideBotControls, drawBotSkill, type Bot } from "./bots.ts"
 import { collideShips } from "./collision.ts"
 import { gunLayout, type BroadsideSide } from "./gun-layout.ts"
 import { ballId, broadsideRefusal, fireGun, traceBall, type BallId, type BroadsideRefusal, type Cannonball } from "./gunnery.ts"
 import type { SeaState } from "./ocean.ts"
 import { seedRng, type RngState } from "./rng.ts"
 import { ffaRules, openingPhase, scoreLimitReached, scoreSink, winnerOf, type MatchPhase, type MatchRules } from "./rules.ts"
-import { makeShip, stepShip, type ShipControls, type ShipId, type ShipState } from "./ship.ts"
+import { makeShip, shipId, stepShip, type ShipControls, type ShipId, type ShipState } from "./ship.ts"
 import { SIM_DT, tuning } from "./tuning.ts"
 import type { Vec3 } from "./vector.ts"
 import { stepWind, type Wind } from "./wind.ts"
@@ -24,6 +25,10 @@ export interface MatchState {
   readonly pendingShots: ReadonlyArray<PendingShot>
   /** Id the next fired ball takes. */
   readonly nextBallId: number
+  /** Ships the sim captains itself; `stepMatch` decides their controls. */
+  readonly bots: ReadonlyArray<Bot>
+  /** Bots that have ever joined; names the next one. */
+  readonly botsJoined: number
 }
 
 /** One gun of an ordered broadside, due to fire at sim time `at`. */
@@ -104,7 +109,27 @@ export const removeShip = (state: MatchState, id: ShipId): MatchState => ({
   ...state,
   ships: state.ships.filter((ship) => ship.id !== id),
   pendingShots: state.pendingShots.filter((shot) => shot.shipId !== id),
+  bots: state.bots.filter((bot) => bot.id !== id).map((bot) => (bot.target === id ? { ...bot, target: undefined } : bot)),
 })
+
+/**
+ * Tops the match up with bots to `tuning.bots.fillTo` ships, or sends bots home (foundered ones first, then the newest)
+ * while there are more ships than that. Call after every human joins or leaves.
+ */
+export const balanceBots = (state: MatchState): MatchState => {
+  let next = state
+  while (next.ships.length < tuning.bots.fillTo) {
+    const id = shipId(`bot-${next.botsJoined + 1}`)
+    const { skill, rng } = drawBotSkill(next.rng)
+    next = addShip({ ...next, rng, bots: [...next.bots, { id, skill, target: undefined }], botsJoined: next.botsJoined + 1 }, spawnPoint(next, id))
+  }
+  while (next.ships.length > tuning.bots.fillTo && next.bots.length > 0) {
+    const lifeOf = (bot: Bot) => next.ships.find((ship) => ship.id === bot.id)?.life._tag
+    const leaving = next.bots.find((bot) => lifeOf(bot) !== "afloat") ?? next.bots[next.bots.length - 1]!
+    next = removeShip(next, leaving.id)
+  }
+  return next
+}
 
 /**
  * Where a joining ship starts: the spawn-ring slot farthest from every ship already afloat, bow
@@ -143,6 +168,8 @@ export const createMatch = (options: {
     balls: [],
     pendingShots: [],
     nextBallId: 1,
+    bots: [],
+    botsJoined: 0,
   })
 
 const noOrders: BroadsideOrders = new Map()
@@ -163,7 +190,7 @@ const respawn = (state: MatchState, ships: ReadonlyArray<ShipState>, ship: ShipS
 }
 
 /**
- * Advances a match by one fixed 30 Hz tick (`SIM_DT`). Pure. Order: helm and sail inputs, broadside orders, guns
+ * Advances a match by one fixed 30 Hz tick (`SIM_DT`). Pure. Order: bots decide, helm and sail inputs, broadside orders, guns
  * due in the ripple fire (with recoil), ships move and push apart, balls fly and hit or splash, sinks score, sinking
  * ships go under and sunk ones respawn, the match phase advances, wind.
  */
@@ -177,11 +204,21 @@ export const stepMatch = (
   const events: Array<MatchEvent> = []
   let pending: Array<PendingShot> = [...state.pendingShots]
   const gunsManned = state.phase._tag !== "ended"
+  const helms = new Map(inputs)
+  const broadsides = new Map(orders)
+  const bots = state.bots.map((bot) => {
+    const decision = decideBotControls(state, bot.id)
+    if (!decision) return bot
+    helms.set(bot.id, decision.controls)
+    if (decision.order) broadsides.set(bot.id, decision.order)
+    else broadsides.delete(bot.id)
+    return { ...bot, target: decision.target }
+  })
 
   let ships = state.ships.map((ship): ShipState => {
     if (!isAfloat(ship)) return ship
-    const controlled = { ...ship, controls: inputs.get(ship.id) ?? ship.controls }
-    const order = gunsManned ? orders.get(ship.id) : undefined
+    const controlled = { ...ship, controls: helms.get(ship.id) ?? ship.controls }
+    const order = gunsManned ? broadsides.get(ship.id) : undefined
     if (!order) return controlled
     const reason = broadsideRefusal(controlled, order.side, order.aimPoint, start)
     if (reason) {
@@ -309,6 +346,8 @@ export const stepMatch = (
       balls: live,
       pendingShots: pending,
       nextBallId,
+      bots,
+      botsJoined: state.botsJoined,
     },
     events,
   }

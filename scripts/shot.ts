@@ -352,6 +352,67 @@ const match = async (browser: Browser, url: string) => {
   ].join("\n")
 }
 
+/** Plays C4 as a human joining quick play: bots fill the room to six, sail on the wind and fight each other with led broadsides. */
+const bots = async (browser: Browser, url: string) => {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } })
+  await page.goto(url)
+  await page.waitForFunction(() => window.brickwake?.joined === true && window.brickwake.ships().length >= 6, undefined, { timeout: 15_000 })
+  await page.mouse.click(640, 360)
+  const ownId = await hook(page, (h) => h.shipId)
+  const start = (await hook(page, (h) => h.ships())).filter((s) => s.id.startsWith("bot-"))
+  check(start.length === 5, `five bots fill the room around one human (${start.map((s) => s.id).join(", ")})`)
+  await page.screenshot({ path: ".shots/c4-join.png" })
+
+  check(await waitFor(page, (h) => h.match()?.phase._tag === "playing", 15_000), "warmup gives way to play")
+  const shooters = new Set<string>()
+  let hits = 0
+  let shots = 0
+  const seen = new Set<string>()
+  const started = Date.now()
+  while (Date.now() - started < 45_000 && (shooters.size < 3 || hits < 3)) {
+    const events = await hook(page, (h) => h.events())
+    for (const event of events) {
+      const key = JSON.stringify(event)
+      if (seen.has(key)) continue
+      seen.add(key)
+      if (event._tag === "cannonFired" && event.shooter.startsWith("bot-")) shooters.add(event.shooter)
+      if (event._tag === "ballHit" && event.shooter.startsWith("bot-")) hits++
+      // Frame the first few bot broadsides from beside the human's ship, looking at the shooter.
+      if (event._tag === "cannonFired" && event.gun === 0 && event.shooter.startsWith("bot-") && shots < 3) {
+        const own = await ownShip(page)
+        const shooter = await shipOrNull(page, event.shooter)
+        if (shooter === null) continue
+        const range = Math.hypot(shooter.position[0] - own.position[0], shooter.position[2] - own.position[2])
+        await page.evaluate(([yaw, distance]) => window.brickwake?.orbit(yaw, 0.12, distance), [bearing(own.position, shooter.position) + Math.PI, Math.min(range * 0.6, 160)] as const)
+        await page.waitForTimeout(700)
+        await page.screenshot({ path: `.shots/c4-fight-${++shots}.png` })
+      }
+    }
+    await page.waitForTimeout(150)
+  }
+  check(shooters.size >= 3, `bots fire broadsides (${[...shooters].join(", ")})`)
+  check(hits >= 3, `bot broadsides hit (${hits} hits seen)`)
+
+  const now = (await hook(page, (h) => h.ships())).filter((s) => s.id.startsWith("bot-"))
+  const moved = now.flatMap((s) => {
+    const before = start.find((b) => b.id === s.id)
+    return before ? [Math.hypot(s.position[0] - before.position[0], s.position[2] - before.position[2])] : []
+  })
+  check(moved.filter((m) => m > 100).length >= 4, `bots sail about (moved ${moved.map((m) => m.toFixed(0)).join(", ")} m)`)
+  await page.keyboard.down("Tab")
+  await page.waitForTimeout(300)
+  await page.screenshot({ path: ".shots/c4-scoreboard.png" })
+  const board = await matchOf(page)
+  await page.keyboard.up("Tab")
+  await page.close()
+  return [
+    `own ship ${ownId}; bots ${start.map((s) => s.id).join(", ")}`,
+    `${shooters.size} bots fired, ${hits} bot hits seen; bots moved ${moved.map((m) => m.toFixed(0)).join(", ")} m`,
+    `scoreboard ${JSON.stringify(board.hud.scoreboard)}`,
+    "saved .shots/c4-{join,fight-1..3,scoreboard}.png",
+  ].join("\n")
+}
+
 const shipOrNull = (page: Page, id: string) => page.evaluate((id) => window.brickwake?.ships().find((s) => s.id === id) ?? null, id)
 
 const freePort = async () => {
@@ -387,7 +448,7 @@ Effect.gen(function* () {
     Effect.promise(() => chromium.launch({ args: ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist"] })),
     (browser) => Effect.promise(() => browser.close()),
   )
-  const checks = { c1: sail, c2: gunnery, c3: match }
+  const checks = { c1: sail, c2: gunnery, c3: match, c4: bots }
   const wanted = process.argv.slice(2)
   for (const [name, run] of Object.entries(checks)) {
     if (wanted.length > 0 && !wanted.includes(name)) continue

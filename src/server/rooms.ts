@@ -9,7 +9,7 @@ import {
   type ServerEvent,
   type ServerMessage,
 } from "../protocol/messages.ts"
-import { addShip, createMatch, removeShip, spawnPoint, stepMatch, type BroadsideOrder, type MatchState } from "../sim/match.ts"
+import { addShip, balanceBots, createMatch, removeShip, spawnPoint, stepMatch, type BroadsideOrder, type MatchState } from "../sim/match.ts"
 import { seas } from "../sim/ocean.ts"
 import { scenarios, scenarioSeats, type ScenarioName } from "../sim/scenarios.ts"
 import { shipId, type ShipControls, type ShipId } from "../sim/ship.ts"
@@ -67,6 +67,16 @@ const encode = Schema.encodeSync(ServerMessageJson)
 const broadcast = (room: Room, message: ServerMessage) => {
   const text = encode(message)
   return Effect.forEach(room.members.values(), (send) => send(text), { discard: true })
+}
+
+/** Tops a quick-play room up with bots, or sends bots home, announcing each bot that comes or goes. */
+const rebalance = (room: Room) => {
+  if (room.scenario !== undefined) return
+  const before = new Set(room.state.ships.map((ship) => ship.id))
+  room.state = balanceBots(room.state)
+  const after = new Set(room.state.ships.map((ship) => ship.id))
+  for (const id of before) if (!after.has(id)) room.events.push({ _tag: "shipLeft", tick: room.state.tick, shipId: id })
+  for (const id of after) if (!before.has(id)) room.events.push({ _tag: "shipJoined", tick: room.state.tick, shipId: id })
 }
 
 const stepRoom = (room: Room) => {
@@ -141,7 +151,7 @@ export const make = Effect.gen(function* () {
 
   const quickPlayRoom = Effect.gen(function* () {
     for (const room of rooms.values()) {
-      if (room.scenario === undefined && room.state.ships.length < tuning.match.maxShips) return room
+      if (room.scenario === undefined && room.members.size < tuning.match.maxShips) return room
     }
     return yield* openRoom(yield* quickPlayMatch, undefined)
   })
@@ -170,6 +180,7 @@ export const make = Effect.gen(function* () {
       room.commands.delete(id)
       room.orders.delete(id)
       room.events.push({ _tag: "shipLeft", tick: room.state.tick, shipId: id })
+      rebalance(room)
       yield* Effect.logInfo(`${id} left room ${room.id}`)
       if (room.members.size === 0) {
         rooms.delete(room.id)
@@ -205,6 +216,7 @@ export const make = Effect.gen(function* () {
           : yield* scenarioRoom(request.scenario, request.room)
       room.members.set(id, send)
       room.events.push({ _tag: "shipJoined", tick: room.state.tick, shipId: id })
+      rebalance(room)
       yield* send(
         encode({
           _tag: "welcome",

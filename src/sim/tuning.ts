@@ -185,6 +185,41 @@ export const tuning = {
     /** Joining ships start on this ring about the arena centre, in the free slot farthest from others. */
     spawnRing: { radius: 260, slots: 12 },
   },
+  bots: {
+    /** Quick-play rooms are topped up with bots to this many ships; bots leave as humans join. */
+    fillTo: 6,
+    /** Seconds ahead a bot judges each candidate heading by, and the turn rate it expects of its ship. */
+    lookahead: 10,
+    turnRate: 10 * degrees,
+    /** Within this far beyond its standoff range a bot starts turning its broadside to the target, metres. */
+    engageBand: 200,
+    /** Bots never steer closer to the wind than this; nearer, the sails barely drive and the rudder loses its grip. */
+    ironsAngle: 55 * degrees,
+    /** Bots steer back inside this radius, well before the arena's push. */
+    edgeRadius: 420,
+    /** How much sooner bots keep off the arena edge the wind blows toward, metres. */
+    downwindMargin: 250,
+    /** Bots keep this far from other hulls, metres, judged this many seconds ahead. */
+    clearance: 80,
+    clearanceChecks: [2, 5, 10],
+    /** Target choice: metres added per other bot already fighting a ship, and taken off the current target. */
+    crowdingPenalty: 120,
+    targetLoyalty: 80,
+    /** Height above the sea the bots aim at, metres: the hull between waterline and rail. */
+    aimHeight: 1,
+    /** Helm: seconds of turn rate the helm allows for, and the heading error it ignores. */
+    helmLead: 1.2,
+    helmDeadband: 3 * degrees,
+    /** Heading costs, relative. */
+    weights: { turn: 0.15, reverse: 6, wind: 0.3, edge: 8, range: 0.5, tooClose: 2, beam: 2, clearance: 4 },
+    /** Each bot's skill is drawn uniformly from these ranges. */
+    skill: {
+      standoff: { min: 110, max: 170 },
+      fireRange: { min: 180, max: 260 },
+      lead: { min: 0.85, max: 1.05 },
+      aimError: { min: 0.04, max: 0.1 },
+    },
+  },
   arena: {
     radius: 700,
     /** The boundary starts pushing here and pushes harder than full sail by `radius`. */
