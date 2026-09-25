@@ -33,3 +33,23 @@ test("sails hang forward of their yards and inside the ship's beam plus the yard
     expect(Math.abs(position.getZ(i))).toBeLessThanOrEqual(Math.max(sail.topHalf, sail.footHalf) + 1e-6)
   }
 })
+
+test("square sails and their lifts brace about their own mast; the jib and the standing rigging stay put", () => {
+  const brace = rig.sails.getAttribute("brace")
+  const cloth = rig.sails.getAttribute("cloth")
+  for (let i = 0; i < brace.count; i++) {
+    const sail = layout.sails[cloth.getW(i)]
+    expect(brace.getY(i)).toBe(sail === undefined ? 0 : 1)
+    if (sail !== undefined) expect(brace.getX(i)).toBeCloseTo(layout.masts[sail.mast]?.x ?? Number.NaN, 5)
+  }
+  const lines = rig.lines.getAttribute("brace")
+  let braced = 0
+  for (let i = 0; i < lines.count; i++) braced += lines.getY(i)
+  expect(braced).toBeGreaterThan(0)
+  expect(braced).toBeLessThan(lines.count / 4)
+})
+
+test("every sail vertex has a unit normal, including the jib's head where its edges meet", () => {
+  const normal = rig.sails.getAttribute("normal")
+  for (let i = 0; i < normal.count; i++) expect(Math.hypot(normal.getX(i), normal.getY(i), normal.getZ(i))).toBeCloseTo(1, 3)
+})

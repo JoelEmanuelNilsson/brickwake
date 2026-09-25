@@ -1,16 +1,18 @@
 import {
   BufferAttribute,
   BufferGeometry,
-  Color,
+  type Color,
+  type CubeTexture,
   DataTexture,
   LinearMipmapLinearFilter,
   Mesh,
   RepeatWrapping,
   RGBAFormat,
   ShaderMaterial,
+  type Texture,
   UniformsLib,
   UniformsUtils,
-  Vector3,
+  type Vector3,
   Vector4,
 } from "three"
 import { waveAngularFrequency, type SeaState } from "../../sim/ocean.ts"
@@ -19,12 +21,15 @@ import { directionFromAngle } from "../../sim/vector.ts"
 /** Most waves the ocean shader sums; `SeaState`s in play have at most four. */
 export const maxOceanWaves = 8
 
-/** Colours the water reflects; kept equal to the sky dome's so the horizon has no seam. */
-export interface OceanSkyColors {
-  readonly horizon: Color
-  readonly zenith: Color
+/** Muzzle-flash lights the sea shows, at most. */
+export const maxFlashes = 4
+
+/** What the sea reflects and is lit by: the captured sky, the sun, and the colour of muzzle flashes. */
+export interface OceanLighting {
+  readonly sky: CubeTexture
   readonly sun: Color
   readonly sunDirection: Vector3
+  readonly flashColor: Color
 }
 
 const gridSegments = 320
@@ -145,18 +150,22 @@ const vertexShader = /* glsl */ `
 `
 
 const fragmentShader = /* glsl */ `
+  #define FLASHES ${maxFlashes}
   uniform sampler2D ripples;
+  uniform samplerCube skyCube;
+  uniform sampler2D wake;
+  uniform float wakePeriod;
   uniform float rippleTime;
   uniform float waveHeight;
-  uniform vec3 skyHorizon;
-  uniform vec3 skyZenith;
   uniform vec3 sunColor;
   uniform vec3 sunDirection;
+  uniform vec4 flashes[FLASHES]; // position, intensity (cd)
+  uniform vec3 flashColor;
+  uniform float fogDensity;
   varying vec3 vWorld;
   varying vec3 vNormal;
   varying float vJacobian;
   varying float vHeight;
-  #include <fog_pars_fragment>
   void main() {
     vec3 toCamera = cameraPosition - vWorld;
     float distance = length(toCamera);
@@ -171,10 +180,9 @@ const fragmentShader = /* glsl */ `
     float facing = max(dot(normal, view), 0.0);
     float fresnel = 0.02 + 0.98 * pow(1.0 - facing, 5.0);
     vec3 reflected = reflect(-view, normal);
-    float up = max(reflected.y, 0.0);
-    vec3 sky = mix(skyHorizon, skyZenith, smoothstep(0.0, 0.45, up));
-    float toSun = max(dot(reflected, sunDirection), 0.0);
-    sky += sunColor * (pow(toSun, 5.0) * 0.5 + pow(toSun, 60.0) * 1.5);
+    reflected.y = max(reflected.y, 0.005);
+    vec3 sky = textureCube(skyCube, reflected).rgb;
+    float toSun = max(dot(normalize(reflected), sunDirection), 0.0);
     vec3 glint = vec3(9.0, 6.5, 4.0) * pow(toSun, 900.0) * (1.0 - smoothstep(400.0, 1400.0, distance));
 
     float crest = clamp(vHeight / max(waveHeight, 0.01) * 0.5 + 0.5, 0.0, 1.0);
@@ -184,16 +192,34 @@ const fragmentShader = /* glsl */ `
     float scatter = crest * crest * (0.35 + 0.65 * max(dot(-view, sunDirection), 0.0)) * max(dot(vNormal, vec3(0.0, 1.0, 0.0)), 0.0);
     vec3 water = mix(deep, shallow, scatter) + sunColor * 0.012 * max(dot(normal, sunDirection), 0.0);
 
-    float foamMask = smoothstep(0.9, 0.75, vJacobian) * smoothstep(0.55, 0.9, crest);
     float foamNoise = texture2D(ripples, vWorld.xz / 5.0 + rippleTime * 0.02).x;
-    float foam = smoothstep(0.45, 0.75, foamMask * (0.35 + foamNoise)) * (1.0 - smoothstep(250.0, 900.0, distance));
+    float foamMask = smoothstep(0.9, 0.75, vJacobian) * smoothstep(0.55, 0.9, crest);
+    float crestFoam = smoothstep(0.45, 0.75, foamMask * (0.35 + foamNoise)) * (1.0 - smoothstep(250.0, 900.0, distance));
+    // Hull and wake foam: dense where fresh, breaking into lace as it thins.
+    float laid = texture2D(wake, vWorld.xz / wakePeriod).r * (1.0 - smoothstep(260.0, 420.0, distance));
+    float lace = texture2D(ripples, vWorld.xz / 3.1 - rippleTime * 0.01).y;
+    // As foam thins it covers less of the water: the pattern's threshold rises, leaving streaks and lace, not a grey sheet.
+    float cover = clamp(laid, 0.0, 1.0);
+    float pattern = foamNoise * 0.55 + lace * 0.45;
+    float wakeFoam = smoothstep(1.0 - cover, 1.15 - cover, pattern) * min(1.0, laid * 4.0);
+    float foam = max(crestFoam, wakeFoam);
 
-    vec3 color = mix(water, sky, fresnel) + glint;
-    color = mix(color, vec3(0.9, 0.85, 0.8) * (0.35 + 0.65 * max(dot(normal, sunDirection), 0.2)), foam * 0.85);
-    gl_FragColor = vec4(color, 1.0);
-    #include <tonemapping_fragment>
-    #include <colorspace_fragment>
-    #include <fog_fragment>
+    vec3 flash = vec3(0.0);
+    for (int i = 0; i < FLASHES; i++) {
+      vec3 toLight = flashes[i].xyz - vWorld;
+      float d2 = max(dot(toLight, toLight), 1.0);
+      vec3 l = toLight * inversesqrt(d2);
+      float lit = flashes[i].w / d2;
+      flash += lit * (0.03 * max(dot(normal, l), 0.0) + 0.6 * fresnel * pow(max(dot(reflected, l), 0.0), 40.0));
+    }
+    flash *= flashColor;
+
+    vec3 color = mix(water, sky, fresnel) + glint + flash;
+    color = mix(color, vec3(0.9, 0.85, 0.8) * (0.35 + 0.65 * max(dot(normal, sunDirection), 0.2)) + flash * 25.0, foam * 0.85);
+    // Fog toward the sky's own horizon in this direction, so the sea meets the sky without a seam.
+    float fogFactor = 1.0 - exp(-fogDensity * fogDensity * distance * distance);
+    vec3 horizon = textureCube(skyCube, normalize(vec3(-view.x, 0.02, -view.z))).rgb;
+    gl_FragColor = vec4(mix(color, horizon, fogFactor), 1.0);
   }
 `
 
@@ -206,8 +232,10 @@ export class OceanSurface {
   readonly sea: SeaState
   readonly #waveA: Array<Vector4>
   readonly #waveB: Array<Vector4>
+  /** Muzzle-flash lights on the sea: position and intensity (cd); the game copies them in each frame. */
+  readonly flashes: Array<Vector4> = Array.from({ length: maxFlashes }, () => new Vector4())
 
-  constructor(sea: SeaState, sky: OceanSkyColors) {
+  constructor(sea: SeaState, lighting: OceanLighting, wakePeriod: number) {
     if (sea.waves.length > maxOceanWaves) throw new Error(`the ocean shader sums at most ${maxOceanWaves} waves`)
     this.sea = sea
     this.#waveA = Array.from({ length: maxOceanWaves }, () => new Vector4())
@@ -227,10 +255,10 @@ export class OceanSurface {
           waveCount: { value: sea.waves.length },
           rippleTime: { value: 0 },
           waveHeight: { value: sea.waves.reduce((sum, wave) => sum + wave.amplitude, 0) },
-          skyHorizon: { value: sky.horizon },
-          skyZenith: { value: sky.zenith },
-          sunColor: { value: sky.sun },
-          sunDirection: { value: sky.sunDirection },
+          sunColor: { value: lighting.sun },
+          sunDirection: { value: lighting.sunDirection },
+          flashColor: { value: lighting.flashColor },
+          wakePeriod: { value: wakePeriod },
         },
       ]),
     })
@@ -238,13 +266,18 @@ export class OceanSurface {
     material.uniforms.waveA = { value: this.#waveA }
     material.uniforms.waveB = { value: this.#waveB }
     material.uniforms.ripples = { value: buildRippleTexture() }
+    material.uniforms.skyCube = { value: lighting.sky }
+    material.uniforms.wake = { value: null }
+    material.uniforms.flashes = { value: this.flashes }
     this.mesh = new Mesh(buildGrid(), material)
     this.mesh.frustumCulled = false
     this.mesh.name = "ocean"
   }
 
-  /** Poses the sea at sim time `time` seconds, with the grid centred under the camera at (x, z). */
-  update(time: number, cameraX: number, cameraZ: number): void {
+  /** Poses the sea at sim time `time` seconds, with the grid centred under the camera at (x, z), showing the foam in `wake`. */
+  update(time: number, cameraX: number, cameraZ: number, wake: Texture): void {
+    const wakeUniform = this.mesh.material.uniforms.wake
+    if (wakeUniform !== undefined) wakeUniform.value = wake
     const originX = Math.round(cameraX / nearSpacing) * nearSpacing
     const originZ = Math.round(cameraZ / nearSpacing) * nearSpacing
     this.mesh.position.set(originX, 0, originZ)

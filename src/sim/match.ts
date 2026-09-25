@@ -113,17 +113,17 @@ export const removeShip = (state: MatchState, id: ShipId): MatchState => ({
 })
 
 /**
- * Tops the match up with bots to `tuning.bots.fillTo` ships, or sends bots home (foundered ones first, then the newest)
+ * Tops the match up with bots to `fillTo` ships, or sends bots home (foundered ones first, then the newest)
  * while there are more ships than that. Call after every human joins or leaves.
  */
-export const balanceBots = (state: MatchState): MatchState => {
+export const balanceBots = (state: MatchState, fillTo: number = tuning.bots.fillTo): MatchState => {
   let next = state
-  while (next.ships.length < tuning.bots.fillTo) {
+  while (next.ships.length < fillTo) {
     const id = shipId(`bot-${next.botsJoined + 1}`)
     const { skill, rng } = drawBotSkill(next.rng)
     next = addShip({ ...next, rng, bots: [...next.bots, { id, skill, target: undefined }], botsJoined: next.botsJoined + 1 }, spawnPoint(next, id))
   }
-  while (next.ships.length > tuning.bots.fillTo && next.bots.length > 0) {
+  while (next.ships.length > fillTo && next.bots.length > 0) {
     const lifeOf = (bot: Bot) => next.ships.find((ship) => ship.id === bot.id)?.life._tag
     const leaving = next.bots.find((bot) => lifeOf(bot) !== "afloat") ?? next.bots[next.bots.length - 1]!
     next = removeShip(next, leaving.id)

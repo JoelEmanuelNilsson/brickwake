@@ -55,6 +55,8 @@ export class Gunnery {
   readonly #audio: GameAudio
   readonly #send: (message: ClientMessage) => void
   readonly #ownId: () => string | null
+  readonly #gunFired: (ball: Cannonball, muzzle: Vector3) => boolean
+  readonly #muzzle = new Vector3()
   readonly #ring: Mesh<RingGeometry, MeshBasicMaterial>
   readonly #aim = new Vector3()
   #hasAim = false
@@ -94,12 +96,15 @@ export class Gunnery {
     readonly audio: GameAudio
     readonly send: (message: ClientMessage) => void
     readonly ownId: () => string | null
+    /** A gun fires on its drawn ship: animate it and write its muzzle's world position; false when the shooter is not drawn. */
+    readonly gunFired: (ball: Cannonball, muzzle: Vector3) => boolean
   }) {
     this.#effects = options.effects
     this.#reticle = options.reticle
     this.#audio = options.audio
     this.#send = options.send
     this.#ownId = options.ownId
+    this.#gunFired = options.gunFired
     this.balls = new Cannonballs(options.scene, {
       fired: (ball) => this.#fired(ball),
       flying: (ball, x, y, z) => {
@@ -266,8 +271,10 @@ export class Gunnery {
   }
 
   #fired(ball: Cannonball) {
-    const { origin, velocity } = ball
+    const { velocity } = ball
     const speed = Math.hypot(velocity.x, velocity.y, velocity.z)
+    // The flash and smoke leave the drawn cannon's muzzle; the ball's own origin is the sim's gun position inside the port.
+    const origin = this.#gunFired(ball, this.#muzzle) ? this.#muzzle : this.#muzzle.set(ball.origin.x, ball.origin.y, ball.origin.z)
     this.#effects.muzzle(origin.x, origin.y, origin.z, velocity.x / speed, velocity.y / speed, velocity.z / speed)
     this.#audio.cannon(origin.x, origin.y, origin.z, this.#time - ball.firedAt)
     this.#shake(origin.x, origin.y, origin.z, ball.shooter === this.#ownId() ? 0.1 : 0.14, 60)

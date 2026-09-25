@@ -413,6 +413,65 @@ const bots = async (browser: Browser, url: string) => {
   ].join("\n")
 }
 
+/**
+ * Plays C5 at Joel's display size (DPR capped to 1.5): the galleon in a full 12-ship bot match under the sunset sky,
+ * screenshots for ref-01, and frame times measured back to back while the bots close in and fight.
+ */
+const scene = async (browser: Browser, url: string) => {
+  const page = await browser.newPage({ viewport: { width: 1728, height: 1117 }, deviceScaleFactor: 2 })
+  await page.goto(`${url}?scenario=armada&orbit=140`)
+  await page.waitForFunction(() => window.brickwake?.joined === true && window.brickwake.ships().length >= 12, undefined, { timeout: 20_000 })
+  await page.mouse.click(864, 558)
+  await page.keyboard.press("KeyW")
+  await page.keyboard.press("KeyW")
+  await page.waitForTimeout(6000)
+  // ref-01's camera: low off the starboard quarter, looking forward past the stern with the sun ahead to starboard.
+  const heading = (await ownShip(page)).heading
+  await page.evaluate((heading) => window.brickwake?.orbit(heading + 0.3, 0.07, 30), heading)
+  await page.waitForTimeout(1500)
+  await page.screenshot({ path: ".shots/c5-ref-01.png" })
+  await page.evaluate((heading) => window.brickwake?.orbit(heading - 0.4, 0.32, 75), heading)
+  await page.waitForTimeout(1500)
+  await page.screenshot({ path: ".shots/c5-wake.png" })
+
+  const measures: Array<Awaited<ReturnType<BrickwakeDebug["measure"]>>> = []
+  const started = Date.now()
+  let fights = 0
+  const seen = new Set<string>()
+  while (Date.now() - started < 60_000) {
+    const views = [[0.4, 0.12, 40], [2.8, 0.12, 40], [-1.9, 0.2, 60], [1.2, 0.1, 30]] as const
+    const [yaw, pitch, distance] = views[measures.length % views.length]!
+    await page.evaluate(([yaw, pitch, distance]) => window.brickwake?.orbit(yaw, pitch, distance), [yaw, pitch, distance] as const)
+    await page.waitForTimeout(400)
+    measures.push(await hook(page, (h) => h.measure(60)))
+    for (const event of await hook(page, (h) => h.events())) {
+      const key = JSON.stringify(event)
+      if (seen.has(key)) continue
+      seen.add(key)
+      if (event._tag === "cannonFired" && event.gun === 0) fights++
+    }
+    if (fights >= 3 && measures.length >= 16) break
+  }
+  const shooting = await hook(page, (h) => h.events().filter((e) => e._tag === "cannonFired").length)
+  if (shooting > 0) await page.screenshot({ path: ".shots/c5-battle.png" })
+  await page.close()
+
+  const sorted = (values: ReadonlyArray<number>) => [...values].sort((a, b) => a - b)
+  const middle = (values: ReadonlyArray<number>) => sorted(values)[Math.floor(values.length / 2)] ?? Number.NaN
+  const pipelined = measures.map((m) => m.pipelined)
+  const worstPipelined = Math.max(...pipelined)
+  const worst = Math.max(...measures.map((m) => m.worst))
+  const heavy = measures.reduce((a, b) => (b.pipelined > a.pipelined ? b : a))
+  // Pipelined frames overlap CPU and GPU as the browser's loop does: that is the frame rate. A frame waited on alone bounds the slowest one.
+  check(worstPipelined <= 1000 / 120, `12 ships render at 120 fps (slowest run ${worstPipelined.toFixed(2)} ms a frame)`)
+  check(worst <= 1000 / 60, `no frame drops below 60 fps (worst frame waited on alone ${worst.toFixed(2)} ms)`)
+  return [
+    `frames at ${heavy.width}×${heavy.height}, ${measures.length} runs of 60 over a 12-ship bot match: pipelined median ${middle(pipelined).toFixed(2)} ms, slowest run ${worstPipelined.toFixed(2)} ms; each frame waited on alone: median ${middle(measures.map((m) => m.median)).toFixed(2)} ms, worst p90 ${Math.max(...measures.map((m) => m.p90)).toFixed(2)} ms, worst ${worst.toFixed(2)} ms`,
+    `slowest run: ${heavy.draws} draws, ${(heavy.triangles / 1e6).toFixed(2)}M tris, detail ${JSON.stringify(heavy.detail)}; ${fights} broadsides seen`,
+    "saved .shots/c5-{ref-01,wake,battle}.png",
+  ].join("\n")
+}
+
 const shipOrNull = (page: Page, id: string) => page.evaluate((id) => window.brickwake?.ships().find((s) => s.id === id) ?? null, id)
 
 const freePort = async () => {
@@ -448,7 +507,7 @@ Effect.gen(function* () {
     Effect.promise(() => chromium.launch({ args: ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist"] })),
     (browser) => Effect.promise(() => browser.close()),
   )
-  const checks = { c1: sail, c2: gunnery, c3: match, c4: bots }
+  const checks = { c1: sail, c2: gunnery, c3: match, c4: bots, c5: scene }
   const wanted = process.argv.slice(2)
   for (const [name, run] of Object.entries(checks)) {
     if (wanted.length > 0 && !wanted.includes(name)) continue

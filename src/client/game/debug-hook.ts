@@ -62,6 +62,21 @@ export interface DebugCamera {
   readonly roll: number
 }
 
+/** Frame cost measured by rendering frames back to back, each waited on until the GPU is done (ms), plus what the frame drew. */
+export interface FrameMeasure {
+  readonly median: number
+  readonly p90: number
+  readonly worst: number
+  /** Mean with no wait between frames, so CPU and GPU overlap as in the browser's own loop. */
+  readonly pipelined: number
+  readonly width: number
+  readonly height: number
+  readonly draws: number
+  readonly triangles: number
+  /** Ships drawn at each brick detail level. */
+  readonly detail: Readonly<Record<"near" | "mid" | "far", number>>
+}
+
 /** The client's match on `window.brickwake` for Playwright, plus a few test controls. Every read returns fresh plain data. */
 export interface BrickwakeDebug {
   readonly connection: ConnectionState
@@ -91,6 +106,8 @@ export interface BrickwakeDebug {
   fireAt(point: readonly [number, number, number]): FireOutcome
   /** Test control: sets the camera orbit as mouse and wheel do; `yaw` is the view direction (see `directionFromAngle`). */
   orbit(yaw: number, pitch: number, distance?: number): void
+  /** Test control: renders `frames` frames of the live game back to back and times them. */
+  measure(frames: number): FrameMeasure
 }
 
 declare global {
@@ -117,6 +134,7 @@ export interface DebugSource {
   readonly audio: () => GameAudio
   readonly match: () => MatchReading
   readonly matchHud: () => MatchHud
+  readonly measure: (frames: number) => FrameMeasure
 }
 
 const describeShip = (id: string, pose: ShipPose, sea: SeaState | undefined, time: number): DebugShip => {
@@ -200,6 +218,7 @@ export const installDebugHook = (source: DebugSource): void => {
     },
     fire: () => source.gunnery().fire(),
     fireAt: ([x, y, z]) => source.gunnery().fire({ x, y, z }),
+    measure: (frames) => source.measure(frames),
     orbit: (yaw, pitch, distance) => {
       const chase = source.camera()
       if (chase === undefined) return

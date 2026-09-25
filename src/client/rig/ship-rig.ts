@@ -69,7 +69,9 @@ const clothGrid = (
       const u = i / nu
       const v = j / nv
       const p = rest(u, v)
-      const tu = sub3(rest(Math.min(u + e, 1), v), rest(Math.max(u - e, 0), v)).map((c) => c / (Math.min(u + e, 1) - Math.max(u - e, 0)))
+      // Tangents are taken a hair inside the edges: the jib's head is one point, where the u tangent would vanish and the normal be NaN.
+      const vt = Math.min(Math.max(v, 1e-2), 1 - 1e-2)
+      const tu = sub3(rest(Math.min(u + e, 1), vt), rest(Math.max(u - e, 0), vt)).map((c) => c / (Math.min(u + e, 1) - Math.max(u - e, 0)))
       const tv = sub3(rest(u, Math.min(v + e, 1)), rest(u, Math.max(v - e, 0))).map((c) => c / (Math.min(v + e, 1) - Math.max(v - e, 0)))
       const tU: V3 = [tu[0] ?? 0, tu[1] ?? 0, tu[2] ?? 0]
       const tV: V3 = [tv[0] ?? 0, tv[1] ?? 0, tv[2] ?? 0]
@@ -139,6 +141,8 @@ export const buildRigGeometry = (layout: RigLayout): RigGeometry => {
   sails.setAttribute("cloth", new Float32BufferAttribute(cloth.cloth, 4))
   sails.setAttribute("tangentU", new Float32BufferAttribute(cloth.tangentU, 3))
   sails.setAttribute("tangentV", new Float32BufferAttribute(cloth.tangentV, 3))
+  const clothIds = cloth.cloth.filter((_, i) => i % 4 === 3)
+  sails.setAttribute("brace", new Float32BufferAttribute(clothIds.flatMap((id) => braceOf(layout.masts[layout.sails[id]?.mast ?? -1])), 2))
   sails.setIndex(cloth.index)
   sails.computeBoundingSphere()
   if (sails.boundingSphere !== null) sails.boundingSphere.radius += 1.5
@@ -257,12 +261,20 @@ export const buildRigGeometry = (layout: RigLayout): RigGeometry => {
         }
       }
     })
+  const unbraced = line.position.length / 3
   for (const m of masts)
     m.yards.forEach((yard, i) => {
       const above = m.yards[i + 1]?.bottom ?? m.top - 0.1
       mirrored((s) => ropeLine([yard.front - 0.2, yard.top, s * (yard.half - 0.1)], [m.x + 0.2, above - 0.05, 0], 0.02))
     })
+  const lineBrace = new Float32Array((line.position.length / 3) * 2)
+  for (const m of masts)
+    for (let v = unbraced; v < line.position.length / 3; v++) {
+      // Each lift runs from its mast's yard up the same mast, so its vertices lie within a few metres of that mast.
+      if (Math.abs((line.position[v * 3] ?? 0) - m.x) < 3) lineBrace.set(braceOf(m), v * 2)
+    }
   const lines = new BufferGeometry()
+  lines.setAttribute("brace", new Float32BufferAttribute(lineBrace, 2))
   lines.setAttribute("position", new Float32BufferAttribute(line.position, 3))
   lines.setAttribute("normal", new Float32BufferAttribute(line.normal, 3))
   lines.setAttribute("color", new Float32BufferAttribute(line.color, 3))
@@ -271,7 +283,25 @@ export const buildRigGeometry = (layout: RigLayout): RigGeometry => {
   return { sails, flags, lines, farLineIndices, sailCount: jibId + 1 }
 }
 
+/** Brace attribute of a vertex that swings with `mast`'s yards: the mast's x (the pivot) and weight 1; others 0, 0. */
+const braceOf = (mast: { readonly x: number } | undefined): [number, number] => (mast === undefined ? [0, 0] : [mast.x, 1])
+
+// Yards swing about their mast's vertical axis; three's rotation.y convention, so +angle turns the bow-facing sail to port.
+const braceChunk = /* glsl */ `
+attribute vec2 brace;
+uniform float uBrace;
+vec3 bracedDirection(vec3 d, float angle) {
+  float c = cos(angle);
+  float s = sin(angle);
+  return vec3(d.x * c + d.z * s, d.y, -d.x * s + d.z * c);
+}
+vec3 bracedPoint(vec3 p, float angle, float pivot) {
+  return bracedDirection(p - vec3(pivot, 0.0, 0.0), angle) + vec3(pivot, 0.0, 0.0);
+}
+`
+
 const sailChunk = /* glsl */ `
+${braceChunk}
 attribute vec3 anchor;
 attribute vec4 cloth;
 attribute vec3 tangentU;
@@ -285,8 +315,10 @@ void sailShape(out vec3 p, out vec3 n) {
   float v = cloth.y;
   float amp = abs(cloth.z);
   float id = cloth.w;
-  float speed = length(uWind);
-  float d = dot(uWind, normal) / 10.0;
+  float angle = uBrace * brace.y;
+  vec3 wind = bracedDirection(uWind, -angle);
+  float speed = length(wind);
+  float d = dot(wind, normal) / 10.0;
   // Square sails go aback only a little before they lie on the mast; the jib (negative amplitude) fills to either side.
   float fill = cloth.z < 0.0 ? clamp(d, -1.0, 1.0) : clamp(d, -0.25, 1.0);
   fill *= 1.0 + 0.06 * sin(uTime * 1.3 + id * 2.1);
@@ -302,8 +334,8 @@ void sailShape(out vec3 p, out vec3 n) {
   float belly = (amp * fill * su * sv + luff * sp * su * v) * uOpen;
   float dbu = (amp * fill * PI * cu * sv + luff * v * (9.0 * cp * su + PI * cu * sp)) * uOpen;
   float dbv = (amp * fill * su * cv * 0.8 * PI + luff * su * (sp + 4.0 * v * cp)) * uOpen;
-  p = (mix(anchor, position, uOpen) + normal * belly) * uShown[int(id + 0.5)];
-  n = normalize(cross(tangentU + normal * dbu, tangentV * max(uOpen, 0.05) + normal * dbv));
+  p = bracedPoint(mix(anchor, position, uOpen) + normal * belly, angle, brace.x) * uShown[int(id + 0.5)];
+  n = bracedDirection(normalize(cross(tangentU + normal * dbu, tangentV * max(uOpen, 0.05) + normal * dbv)), angle);
 }
 `
 
@@ -335,6 +367,7 @@ type RigUniforms = {
   readonly uWind: { value: Vector3 }
   readonly uOpen: { value: number }
   readonly uShown: { value: Array<number> }
+  readonly uBrace: { value: number }
 }
 
 const shaped = (chunk: string, fn: string, uniforms: RigUniforms, depth: boolean) => (shader: WebGLProgramParametersWithUniforms) => {
@@ -370,7 +403,7 @@ export class ShipRig {
 
   constructor(geometry: RigGeometry, livery: SailLivery) {
     this.geometry = geometry
-    this.uniforms = { uTime: { value: 0 }, uWind: { value: new Vector3() }, uOpen: { value: 1 }, uShown: { value: new Array<number>(maxSails).fill(1) } }
+    this.uniforms = { uTime: { value: 0 }, uWind: { value: new Vector3() }, uOpen: { value: 1 }, uShown: { value: new Array<number>(maxSails).fill(1) }, uBrace: { value: 0 } }
     const map = liveryAtlas(livery)
     this.sailMaterial = new MeshStandardMaterial({ map, side: DoubleSide, roughness: 0.92, metalness: 0 })
     this.sailMaterial.onBeforeCompile = shaped(sailChunk, "sailShape", this.uniforms, false)
@@ -386,6 +419,14 @@ export class ShipRig {
     flagDepth.customProgramCacheKey = () => "rig-flag-depth"
     this.depthMaterials = [sailDepth, flagDepth]
     this.lineMaterial = new MeshStandardMaterial({ vertexColors: true, roughness: 0.8, metalness: 0 })
+    this.lineMaterial.onBeforeCompile = (shader) => {
+      shader.uniforms.uBrace = this.uniforms.uBrace
+      shader.vertexShader = shader.vertexShader
+        .replace("#include <common>", `#include <common>\n${braceChunk}`)
+        .replace("#include <beginnormal_vertex>", "vec3 objectNormal = bracedDirection(normal, uBrace * brace.y);")
+        .replace("#include <begin_vertex>", "vec3 transformed = bracedPoint(position, uBrace * brace.y, brace.x);")
+    }
+    this.lineMaterial.customProgramCacheKey = () => "rig-lines"
 
     this.sails = new Mesh(geometry.sails, this.sailMaterial)
     this.sails.name = "sails"
@@ -426,6 +467,11 @@ export class ShipRig {
   /** How far the sails are let out right now, 0 furled to 1 full. */
   get openness(): number {
     return this.uniforms.uOpen.value
+  }
+
+  /** Swing the square yards and their sails about the masts by `angle` radians (three's rotation.y sense; 0 = square). */
+  setBrace(angle: number): void {
+    this.uniforms.uBrace.value = angle
   }
 
   /** Show or hide one sail by its index (layout sails in order, then the jib), e.g. when its yard falls. */
