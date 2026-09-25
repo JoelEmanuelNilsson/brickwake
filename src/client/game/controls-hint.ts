@@ -1,5 +1,5 @@
 /** The things a new captain is shown how to do, in the order they are shown. */
-export type HintStep = "sail" | "steer" | "fire" | "gunport"
+export type HintStep = "sail" | "steer" | "aim" | "fire"
 
 /** What the hint reads each frame to know which steps are done and whether the next one makes sense yet. */
 export interface HintReading {
@@ -9,21 +9,22 @@ export interface HintReading {
   rudder: number
   /** The guns on the facing side could fire at the reticle now. */
   canFire: boolean
-  gunport: boolean
+  /** The aim view is held. */
+  aim: boolean
 }
 
 const steps: ReadonlyArray<{ readonly step: HintStep; readonly keys: ReadonlyArray<string>; readonly text: string }> = [
   { step: "sail", keys: ["W"], text: "raise sail" },
   { step: "steer", keys: ["A", "D"], text: "steer" },
-  { step: "fire", keys: ["Click"], text: "fire where the reticle points" },
-  { step: "gunport", keys: ["Right"], text: "hold to aim from the gunport" },
+  { step: "aim", keys: ["Space", "Right"], text: "hold to aim the broadside · mouse up aims farther" },
+  { step: "fire", keys: ["Click", "F"], text: "fire where the arcs fall" },
 ]
 
 const hintsKey = "brickwake.hints"
-/** Seconds after setting sail before the first hint, between hints, and before an unused gunport hint goes. */
+/** Seconds after setting sail before the first hint, between hints, and before an unused aim hint goes. */
 const firstDelay = 1.5
 const gapSeconds = 1.2
-const gunportSeconds = 9
+const aimSeconds = 9
 /** Seconds a done hint lingers before it fades, so the player sees it was the right key. */
 const doneLinger = 0.5
 
@@ -67,13 +68,13 @@ export class ControlsHint {
     if (!this.#enabled) return
     if (reading.sailLevel > 0) this.#done.add("sail")
     if (reading.rudder !== 0) this.#done.add("steer")
-    if (reading.gunport) this.#done.add("gunport")
+    if (reading.aim) this.#done.add("aim")
     const current = steps[this.#index]
     if (current === undefined) return this.#finish()
     if (!reading.sailing || reading.paused) return this.#show(false)
     if (this.#showing) {
       this.#shownFor += dt
-      const expired = current.step === "gunport" && this.#shownFor > gunportSeconds
+      const expired = current.step === "aim" && this.#shownFor > aimSeconds
       if (this.#done.has(current.step) || expired) {
         this.#done.add(current.step)
         this.#wait -= dt

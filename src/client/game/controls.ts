@@ -11,15 +11,20 @@ export interface HelmRequest {
 const raise: Record<SailLevel, SailLevel> = { 0: 1, 1: 2, 2: 2 }
 const lower: Record<SailLevel, SailLevel> = { 0: 0, 1: 0, 2: 1 }
 
+/** Wheel-equivalent delta of one Q/E press. */
+const zoomStep = 180
+
 /**
- * Keyboard helm (W/S sail a level, A/D held rudder), pointer-locked mouse orbit, left-click fire and right-held gunport view. Input counts only
- * once `active` is true, after the player's first click.
+ * Keyboard helm (W/S sail a level, A/D held rudder), pointer-locked mouse orbit and aim, left click or F to fire, right
+ * mouse or Space held for the aim view, wheel or Q/E to zoom. Input counts only once `active` is true, after the player's first click.
  */
 export class Controls {
   #sail: SailLevel = 0
   #rudder: RudderCommand = 0
   #port = false
   #starboard = false
+  #aimKey = false
+  #aimButton = false
   active = false
   readonly #send: (message: ClientMessage) => void
   readonly #camera: ChaseCamera
@@ -44,6 +49,19 @@ export class Controls {
           this.#starboard = true
           this.#steer()
           break
+        case "Space":
+          this.#aimKey = true
+          this.#aim()
+          break
+        case "KeyF":
+          if (!event.repeat) fire()
+          break
+        case "KeyQ":
+          camera.zoom(zoomStep)
+          break
+        case "KeyE":
+          camera.zoom(-zoomStep)
+          break
         default:
           return
       }
@@ -52,7 +70,10 @@ export class Controls {
     window.addEventListener("keyup", (event) => {
       if (event.code === "KeyA") this.#port = false
       else if (event.code === "KeyD") this.#starboard = false
-      else return
+      else if (event.code === "Space") {
+        this.#aimKey = false
+        return this.#aim()
+      } else return
       this.#steer()
     })
     // A key released while the window lost focus never sends keyup; centre the rudder instead of leaving it hard over.
@@ -63,10 +84,15 @@ export class Controls {
     // Without pointer lock the click is the one that asks for it, not a shot.
     element.addEventListener("mousedown", (event) => {
       if (this.active && event.button === 0 && document.pointerLockElement === element) fire()
-      if (this.active && event.button === 2) camera.holdGunport(true)
+      if (this.active && event.button === 2) {
+        this.#aimButton = true
+        this.#aim()
+      }
     })
     window.addEventListener("mouseup", (event) => {
-      if (event.button === 2) camera.holdGunport(false)
+      if (event.button !== 2) return
+      this.#aimButton = false
+      this.#aim()
     })
     element.addEventListener("contextmenu", (event) => event.preventDefault())
     element.addEventListener("wheel", (event) => camera.zoom(event.deltaY), { passive: true })
@@ -77,12 +103,14 @@ export class Controls {
     return { rudder: this.#rudder, sail: this.#sail }
   }
 
-  /** Lets go of every held input: the rudder centres and the gunport view ends. Sail stays as set. */
+  /** Lets go of every held input: the rudder centres and the aim view ends. Sail stays as set. */
   release(): void {
     this.#port = false
     this.#starboard = false
+    this.#aimKey = false
+    this.#aimButton = false
     this.#steer()
-    this.#camera.holdGunport(false)
+    this.#aim()
   }
 
   /** Adopts the ship's sail level from the server, for a fresh join. */
@@ -94,6 +122,10 @@ export class Controls {
     if (level === this.#sail) return
     this.#sail = level
     this.#send({ _tag: "setSail", level })
+  }
+
+  #aim() {
+    this.#camera.holdAim(this.#aimKey || this.#aimButton)
   }
 
   #steer() {

@@ -1,6 +1,5 @@
-import { Euler, MathUtils, Matrix4, type Object3D, PerspectiveCamera, Quaternion, Vector3 } from "three"
-import type { GalleonModel } from "./galleon.ts"
-import { gunportFov, gunportNear, GunportView } from "./gunport-view.ts"
+import { Euler, MathUtils, type Object3D, PerspectiveCamera, Quaternion, Vector3 } from "three"
+import { AimView } from "./aim-view.ts"
 
 /** Radians of orbit per pixel of mouse movement at sensitivity 1. */
 const radiansPerPixel = 0.0022
@@ -18,74 +17,75 @@ const shakeReach = 1.1
 const shakeDrain = 1.6
 const chaseFov = 55
 const chaseNear = 0.5
-/** Largest shake of the view at the gunport, radians, at full trauma: the eye is on the ship, so shake turns it rather than moving a target. */
-const portShake = 0.018
-/** Farthest the chase ray is followed to the sea when the gunport view picks its side and aim, metres. */
-const portAimReach = 600
+/** Largest shake of the aim view, radians, at full trauma: the eye rides the ship, so shake turns it rather than moving a target. */
+const aimShake = 0.012
+/** Nearest and farthest aim, metres: the far end is past the guns' ~300 m reach, so "out of range" shows. */
+const minRange = 20
+const maxRange = 360
+/** How high the swing between the chase and aim views lifts the camera at its middle, metres: over the rig, not through it. */
+const swingLift = 14
+
+/** Aim range for an orbit pitch: level looks far, steep looks near, spaced evenly in log range so each pixel moves the aim a similar share. */
+export const rangeAtPitch = (pitch: number): number =>
+  maxRange * (minRange / maxRange) ** MathUtils.clamp((pitch - minPitch) / (maxPitch - minPitch), 0, 1)
 
 /**
- * Chase camera orbiting the own ship. Yaw is world-fixed and the camera's up is always world up, so it
- * never inherits the ship's roll or pitch; mouse orbit is the aim direction. Held, the gunport view takes the
- * camera onto the ship's gun deck, where it rides the ship's roll and pitch.
+ * Chase camera orbiting the own ship. Yaw is world-fixed and the camera's up is always world up, so it never inherits
+ * the ship's roll or pitch. The orbit is also the aim: the view's bearing is the aim bearing and the orbit pitch sets the
+ * range (`rangeAtPitch`), so the same mouse motion aims in the chase and aim views, on either side. Held, the aim view
+ * swings the camera over the shoulder of the facing broadside.
  */
 export class ChaseCamera {
   readonly camera: PerspectiveCamera
-  /** Yaw of the camera's offset from the ship (see `directionFromAngle`); the view looks the opposite way. */
+  /** Yaw of the camera's offset from the ship (see `directionFromAngle`); the view and the aim bear the opposite way. */
   yaw = 0
-  /** Elevation of the camera above the focus, radians. */
+  /** Elevation of the camera above the focus, radians; also sets the aim range. */
   pitch = 0.28
   distance = 42
   /** Mouse look speed as a multiple of the default (the sensitivity setting). */
   sensitivity = 1
-  /** The unshaken centre ray the reticle aims along: from the camera toward the focus. */
-  readonly aimOrigin = new Vector3()
-  readonly aimDirection = new Vector3(1, 0, 0)
+  /** The flat-sea point the guns aim at: `range` metres from the ship along the view's bearing, at sea level. */
+  readonly aimTarget = new Vector3()
+  readonly aimView = new AimView()
   readonly #focus = new Vector3()
   readonly #target = new Vector3()
   #trauma = 0
   #clock = 0
   readonly #minHeight: number
   #following = false
-  readonly gunport: GunportView
-  #ship: Object3D | undefined
-  readonly #chaseQ = new Quaternion()
-  readonly #portQ = new Quaternion()
+  #heading = 0
+  readonly #aimQ = new Quaternion()
   readonly #eye = new Vector3()
-  readonly #approach = new Vector3()
-  readonly #v = new Vector3()
+  readonly #forward = new Vector3()
   readonly #shakeQ = new Quaternion()
   readonly #shakeEuler = new Euler()
-  readonly #shaken = new Quaternion()
-  readonly #m = new Matrix4()
 
-  /** `minHeight` keeps the camera above the highest crest the sea can raise; `guns` places the gunport view. */
-  constructor(minHeight: number, guns: GalleonModel["guns"]) {
+  /** `minHeight` keeps the camera above the highest crest the sea can raise. */
+  constructor(minHeight: number) {
     this.camera = new PerspectiveCamera(chaseFov, 1, chaseNear, 6000)
     this.#minHeight = minHeight
-    this.gunport = new GunportView(guns)
   }
 
-  /** Holds (right mouse down) or releases the gunport view; it holds only while an own ship is afloat. */
-  holdGunport(held: boolean): void {
-    if (!held) return this.gunport.leave()
-    const ship = this.#ship
-    if (ship === undefined) return
-    const origin = this.aimOrigin
-    const direction = this.aimDirection
-    const reach = direction.y < 0 ? Math.min(portAimReach, (ship.position.y - origin.y) / direction.y) : portAimReach
-    this.gunport.enter(ship, this.#v.copy(direction).multiplyScalar(reach).add(origin))
+  /** Horizontal distance from the ship to the aim, metres. */
+  get range(): number {
+    return rangeAtPitch(this.pitch)
   }
 
-  /** Orbits by a mouse movement in pixels; at the gunport, turns the view within the port's arc. */
+  /** Holds (right mouse or Space down) or releases the aim view; it holds only while an own ship is afloat. */
+  holdAim(held: boolean): void {
+    this.aimView.hold(held && this.#following, this.yaw + Math.PI, this.#heading)
+  }
+
+  /** Orbits by a mouse movement in pixels: right turns the aim right, up aims farther. Finer in the narrower aim view. */
   look(dx: number, dy: number): void {
-    const perPixel = radiansPerPixel * this.sensitivity
-    if (this.gunport.held) return this.gunport.look(dx, dy, perPixel)
+    const perPixel = radiansPerPixel * this.sensitivity * MathUtils.lerp(1, this.aimView.fov / chaseFov, this.aimView.blend)
     this.yaw -= dx * perPixel
     this.pitch = Math.max(minPitch, Math.min(maxPitch, this.pitch + dy * perPixel))
   }
 
-  /** Zooms by a wheel delta. */
+  /** Zooms by a wheel delta: the orbit distance in the chase view, the magnification in the aim view. */
   zoom(deltaY: number): void {
+    if (this.aimView.held) return this.aimView.magnify(Math.exp(-deltaY * 0.001))
     this.distance = Math.max(minDistance, Math.min(maxDistance, this.distance * Math.exp(deltaY * 0.001)))
   }
 
@@ -106,13 +106,18 @@ export class ChaseCamera {
   }
 
   /**
-   * Follows the ship origin at (x, y, z), `dt` seconds after the previous call; `ship` is the own ship as drawn, for the
-   * gunport view, undefined when it cannot man its guns.
+   * Follows the ship origin at (x, y, z), `dt` seconds after the previous call; `ship` is the own ship as drawn, undefined
+   * when it cannot man its guns, which ends the aim view.
    */
   follow(x: number, y: number, z: number, dt: number, ship?: Object3D): void {
-    this.#ship = ship
-    if (ship === undefined) this.gunport.leave()
-    this.gunport.step(dt)
+    if (ship === undefined) this.aimView.hold(false, 0, 0)
+    else {
+      const forward = this.#forward.set(1, 0, 0).applyQuaternion(ship.quaternion)
+      this.#heading = Math.atan2(-forward.z, forward.x)
+    }
+    const aim = this.aimView
+    aim.step(dt)
+    if (aim.held) this.yaw = aim.clampBearing(this.yaw + Math.PI, this.#heading) - Math.PI
     if (!this.#following) {
       this.#focus.set(x, y + focusHeight, z)
       this.#following = true
@@ -123,6 +128,8 @@ export class ChaseCamera {
       this.#focus.z += (z - this.#focus.z) * horizontal
       this.#focus.y += (y + focusHeight - this.#focus.y) * vertical
     }
+    const range = this.range
+    this.aimTarget.set(x - Math.cos(this.yaw) * range, 0, z + Math.sin(this.yaw) * range)
     const flat = Math.cos(this.pitch) * this.distance
     this.camera.position.set(
       this.#focus.x + Math.cos(this.yaw) * flat,
@@ -130,8 +137,6 @@ export class ChaseCamera {
       this.#focus.z - Math.sin(this.yaw) * flat,
     )
     this.camera.up.set(0, 1, 0)
-    this.aimOrigin.copy(this.camera.position)
-    this.aimDirection.subVectors(this.#focus, this.camera.position).normalize()
     // Shake moves the look target, never the up vector, so the horizon still never rolls.
     this.#clock += dt
     this.#trauma = Math.max(0, this.#trauma - shakeDrain * dt)
@@ -143,43 +148,25 @@ export class ChaseCamera {
       this.#focus.z + reach * (Math.sin(t * 43.7 + 4.2) + 0.5 * Math.sin(t * 97.3 + 2.9)),
     )
     this.camera.lookAt(this.#target)
-    this.#ridePort(ship)
+    this.#swingToAim(x, z)
   }
 
-  #ridePort(ship: Object3D | undefined) {
-    const port = this.gunport
-    const t = ship === undefined ? 0 : port.blend
-    const near = t > 0 ? gunportNear : chaseNear
-    const fov = MathUtils.lerp(chaseFov, gunportFov, t)
-    if (near !== this.camera.near || fov !== this.camera.fov) {
-      this.camera.near = near
+  #swingToAim(x: number, z: number) {
+    const aim = this.aimView
+    const t = aim.blend
+    const fov = MathUtils.lerp(chaseFov, aim.fov, t)
+    if (fov !== this.camera.fov) {
       this.camera.fov = fov
       this.camera.updateProjectionMatrix()
     }
-    if (ship === undefined || t === 0) return
+    if (t === 0) return
     const camera = this.camera
-    port.pose(ship, this.#eye, this.#portQ, this.#approach)
-    // Unshaken chase orientation, so the aim ray blends between two steady rays.
-    this.#chaseQ.setFromRotationMatrix(this.#m.lookAt(this.aimOrigin, this.#focus, camera.up))
-    const chase = this.aimOrigin
-    const u = 1 - t
-    // A quadratic path whose last leg comes in along the port's outward line: the camera enters through the port.
-    camera.position.set(
-      u * u * chase.x + 2 * u * t * this.#approach.x + t * t * this.#eye.x,
-      u * u * chase.y + 2 * u * t * this.#approach.y + t * t * this.#eye.y,
-      u * u * chase.z + 2 * u * t * this.#approach.z + t * t * this.#eye.z,
-    )
-    this.#shaken.copy(camera.quaternion)
-    camera.quaternion.copy(this.#chaseQ).slerp(this.#portQ, t)
-    this.aimOrigin.copy(camera.position)
-    this.aimDirection.set(0, 0, -1).applyQuaternion(camera.quaternion)
-    if (port.held && t === 1) {
-      const d = this.aimDirection
-      this.yaw = Math.atan2(-d.z, d.x) + Math.PI
-    }
-    const reach = this.#trauma * this.#trauma * portShake
+    aim.pose(x, this.#focus.y - focusHeight, z, this.#heading, this.aimTarget, this.#eye, this.#aimQ)
+    camera.position.lerp(this.#eye, t)
+    camera.position.y += swingLift * Math.sin(Math.PI * t)
+    const reach = this.#trauma * this.#trauma * aimShake * t
     const k = this.#clock
     this.#shakeEuler.set(reach * (Math.sin(k * 47.3) + 0.5 * Math.sin(k * 91.7)), reach * (Math.sin(k * 53.1 + 2.1) + 0.5 * Math.sin(k * 83.9)), 0)
-    camera.quaternion.copy(this.#shaken).slerp(this.#portQ, t).multiply(this.#shakeQ.setFromEuler(this.#shakeEuler))
+    camera.quaternion.slerp(this.#aimQ, t).multiply(this.#shakeQ.setFromEuler(this.#shakeEuler))
   }
 }

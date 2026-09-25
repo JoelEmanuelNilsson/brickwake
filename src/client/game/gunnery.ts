@@ -1,10 +1,11 @@
-import { AdditiveBlending, Color, Mesh, MeshBasicMaterial, Quaternion, RingGeometry, Vector3, type Scene } from "three"
+import { AdditiveBlending, BufferAttribute, BufferGeometry, CircleGeometry, Color, LineBasicMaterial, LineSegments, Mesh, MeshBasicMaterial, Quaternion, RingGeometry, Vector3, type Scene } from "three"
 import type { ClientMessage, ServerEvent } from "../../protocol/messages.ts"
 import { gunLayout, gunsOnSide, type BroadsideSide } from "../../sim/gun-layout.ts"
-import { ballVelocityAt, broadsideRefusal, type BroadsideRefusal, type Cannonball } from "../../sim/gunnery.ts"
+import { aimGun, ballId, ballVelocityAt, broadsideRefusal, writeBallPosition, type BroadsideRefusal, type Cannonball } from "../../sim/gunnery.ts"
 import { oceanHeight, type SeaState } from "../../sim/ocean.ts"
 import { shipId } from "../../sim/ship.ts"
 import { tuning } from "../../sim/tuning.ts"
+import { add, scale } from "../../sim/vector.ts"
 import type { GameAudio } from "../audio/game-audio.ts"
 import { Cannonballs, type BallEnd } from "./balls.ts"
 import type { ChaseCamera } from "./chase-camera.ts"
@@ -27,19 +28,22 @@ export interface AimReading {
   readonly state: ReticleReading["state"]
   readonly range: number
   readonly reloadLeft: number
+  /** The predicted flights of the facing broadside are drawn. */
+  readonly fan: boolean
 }
 
-/** Farthest the reticle looks for the sea from the ship, metres: past the guns' ~300 m reach so "out of range" shows. */
-const maxAimRange = 600
-const minMarchStep = 0.5
-const maxMarchStep = 40
-const marchSteps = 200
-const bisections = 16
 /** Cross-range and along-range spread of a broadside per metre of range (±4 m across, ±6 m along at 220 m). */
 const spreadAcross = Math.tan(tuning.guns.spread.traverse)
 const spreadAlong = 6 / 220
 
 const guns = { port: gunsOnSide(gunLayout, "port"), starboard: gunsOnSide(gunLayout, "starboard") }
+/** The guns whose predicted flights draw the fan: the lower deck, bow to stern; the upper deck's flights lie just above them. */
+const fanGuns = {
+  port: gunLayout.flatMap((gun, index) => (gun.side === "port" && gun.deck === "lower" ? [{ gun, index }] : [])),
+  starboard: gunLayout.flatMap((gun, index) => (gun.side === "starboard" && gun.deck === "lower" ? [{ gun, index }] : [])),
+}
+const fanSamples = 24
+const fanVertices = fanGuns.starboard.length * (fanSamples - 1) * 2
 
 const ringColors = {
   ready: new Color(2.4, 1.6, 0.45),
@@ -50,8 +54,9 @@ const ringColors = {
 const falloff = (distance: number, reach: number) => 1 / (1 + (distance / reach) ** 2)
 
 /**
- * The player's guns: picks the aim point on the drawn sea under the reticle, says whether the facing broadside can
- * fire, sends the order on click with a local fuse sizzle, and plays every ball's flight, flash, splash and hit.
+ * The player's guns: picks the aim point on the drawn sea at the camera's aim (or the hull in front of it), draws the
+ * predicted fall of shot (a fan of each gun's flight and the spread band where the balls land), says whether the facing
+ * broadside can fire, sends the order on click with a local fuse sizzle, and plays every ball's flight, flash, splash and hit.
  */
 export class Gunnery {
   readonly balls: Cannonballs
@@ -63,6 +68,12 @@ export class Gunnery {
   readonly #gunFired: (ball: Cannonball, muzzle: Vector3) => boolean
   readonly #muzzle = new Vector3()
   readonly #ring: Mesh<RingGeometry, MeshBasicMaterial>
+  readonly #band: Mesh<CircleGeometry, MeshBasicMaterial>
+  readonly #fan: LineSegments<BufferGeometry, LineBasicMaterial>
+  readonly #fanPositions = new Float32Array(fanVertices * 3)
+  readonly #fanPoint = { x: 0, y: 0, z: 0 }
+  readonly #ray = new Vector3()
+  readonly #screen = new Vector3()
   readonly #aim = new Vector3()
   #hasAim = false
   /** The aim is on another ship's hull, not the sea: the spread ring would lie hidden under it. */
@@ -129,13 +140,22 @@ export class Gunnery {
       },
       ended: (end, ball) => this.#ended(end, ball),
     })
-    this.#ring = new Mesh(
-      new RingGeometry(0.9, 1, 64).rotateX(-Math.PI / 2),
-      new MeshBasicMaterial({ color: ringColors.ready, transparent: true, opacity: 0.75, depthWrite: false, fog: false, blending: AdditiveBlending }),
-    )
+    // The indicator draws over everything, the own ship included: the fall of shot must read from any view.
+    const overlay = { transparent: true, depthTest: false, depthWrite: false, fog: false, blending: AdditiveBlending } as const
+    this.#ring = new Mesh(new RingGeometry(0.88, 1, 64).rotateX(-Math.PI / 2), new MeshBasicMaterial({ ...overlay, color: ringColors.ready, opacity: 0.85 }))
+    this.#band = new Mesh(new CircleGeometry(0.88, 48).rotateX(-Math.PI / 2), new MeshBasicMaterial({ ...overlay, color: ringColors.ready, opacity: 0.16 }))
+    this.#ring.add(this.#band)
     this.#ring.visible = false
     this.#ring.renderOrder = 4
+    this.#band.renderOrder = 4
     options.scene.add(this.#ring)
+    const fan = new BufferGeometry()
+    fan.setAttribute("position", new BufferAttribute(this.#fanPositions, 3))
+    this.#fan = new LineSegments(fan, new LineBasicMaterial({ ...overlay, color: ringColors.ready, opacity: 0.45 }))
+    this.#fan.frustumCulled = false
+    this.#fan.visible = false
+    this.#fan.renderOrder = 4
+    options.scene.add(this.#fan)
   }
 
   /** Handles the gunnery events among the server events. */
@@ -159,12 +179,16 @@ export class Gunnery {
     this.#reticle.visible = sailing && pose !== undefined
     if (pose === undefined) {
       this.#ring.visible = false
+      this.#fan.visible = false
       return
     }
-    this.#hasAim = this.#pickAim(camera, sea, renderTime, pose)
+    this.#hasAim = this.#pickAim(camera, sea, renderTime)
     const reading = this.#read(this.#hasAim ? this.#aim : undefined, pose, renderTime)
     this.#reticle.update(reading)
+    const screen = this.#screen.copy(this.#aim).project(camera.camera)
+    this.#reticle.place(screen.x, screen.z > 1 ? -1 : screen.y)
     this.#placeRing(reading, sea, renderTime)
+    this.#placeFan(reading)
   }
 
   /** The current aim, for the debug hook. */
@@ -177,6 +201,7 @@ export class Gunnery {
       state: r.state,
       range: r.range,
       reloadLeft: r.reloadLeft,
+      fan: this.#fan.visible,
     }
   }
 
@@ -222,46 +247,19 @@ export class Gunnery {
     return "fired"
   }
 
-  /** The aim under the camera's centre ray: the first ship hull it strikes, else the drawn sea at `time`; false when it meets neither within range. */
-  #pickAim(camera: ChaseCamera, sea: SeaState, time: number, pose: ShipPose): boolean {
-    const o = camera.aimOrigin
-    const d = camera.aimDirection
-    const onSea = this.#pickSea(o, d, sea, time, pose)
-    const reach = onSea ? this.#aim.distanceTo(o) : maxAimRange
-    const hull = this.#hullAlong(o, d, reach)
+  /** The aim: the drawn sea at the camera's aim target at `time`, or the first other ship's hull on the line of sight to it. */
+  #pickAim(camera: ChaseCamera, sea: SeaState, time: number): boolean {
+    const target = camera.aimTarget
+    const eye = camera.camera.position
+    this.#aim.set(target.x, oceanHeight(sea, target.x, target.z, time), target.z)
+    const toward = this.#ray.subVectors(this.#aim, eye)
+    const reach = toward.length()
+    if (reach === 0) return false
+    toward.divideScalar(reach)
+    const hull = this.#hullAlong(eye, toward, reach)
     this.#onHull = hull !== undefined
-    if (hull !== undefined) this.#aim.copy(d).multiplyScalar(hull).add(o)
-    return onSea || this.#onHull
-  }
-
-  /** Marches the ray to the drawn sea at `time`; false when it meets no water within range. */
-  #pickSea(o: Vector3, d: Vector3, sea: SeaState, time: number, pose: ShipPose): boolean {
-    const gap = (t: number) => o.y + d.y * t - oceanHeight(sea, o.x + d.x * t, o.z + d.z * t, time)
-    const descent = Math.max(-d.y, 0.02)
-    let t = 0
-    let above = gap(0)
-    if (above <= 0) return false
-    for (let i = 0; i < marchSteps; i++) {
-      const next = t + Math.min(maxMarchStep, Math.max(minMarchStep, (0.8 * above) / descent))
-      const g = gap(next)
-      if (Math.hypot(o.x + d.x * next - pose.x, o.z + d.z * next - pose.z) > maxAimRange) return false
-      if (g <= 0) {
-        let low = t
-        let high = next
-        for (let k = 0; k < bisections; k++) {
-          const mid = (low + high) / 2
-          if (gap(mid) > 0) low = mid
-          else high = mid
-        }
-        const x = o.x + d.x * high
-        const z = o.z + d.z * high
-        this.#aim.set(x, oceanHeight(sea, x, z, time), z)
-        return true
-      }
-      t = next
-      above = g
-    }
-    return false
+    if (hull !== undefined) this.#aim.copy(toward).multiplyScalar(hull).add(eye)
+    return true
   }
 
   #read(aim: { readonly x: number; readonly y: number; readonly z: number } | undefined, pose: ShipPose, time: number): ReticleReading {
@@ -280,8 +278,8 @@ export class Gunnery {
     ship.reloadedAt.port = Math.max(pose.reloadPort, this.#ordered.port)
     ship.reloadedAt.starboard = Math.max(pose.reloadStarboard, this.#ordered.starboard)
     this.#starboard.set(0, 0, 1).applyQuaternion(this.#q.set(pose.qx, pose.qy, pose.qz, pose.qw))
-    const toward = aim === undefined ? this.#camera?.aimDirection : this.#v.set(aim.x - pose.x, 0, aim.z - pose.z)
-    r.side = toward !== undefined && toward.x * this.#starboard.x + toward.z * this.#starboard.z < 0 ? "port" : "starboard"
+    const toward = aim === undefined ? this.#v.set(0, 0, 0) : this.#v.set(aim.x - pose.x, 0, aim.z - pose.z)
+    r.side = toward.x * this.#starboard.x + toward.z * this.#starboard.z < 0 ? "port" : "starboard"
     const reloadedAt = ship.reloadedAt[r.side]
     r.reloadLeft = Math.max(0, reloadedAt - time)
     r.loaded = 1 - Math.min(1, r.reloadLeft / tuning.guns.reload)
@@ -300,6 +298,33 @@ export class Gunnery {
     const across = Math.max(1.2, reading.range * spreadAcross)
     ring.scale.set(Math.max(across, reading.range * spreadAlong), 1, across)
     ring.material.color.copy(reading.state === "ready" ? ringColors.ready : reading.state === "reloading" ? ringColors.reloading : ringColors.refused)
+    this.#band.material.color.copy(ring.material.color)
+  }
+
+  /** Draws each fan gun's predicted flight to the aim; hidden when the broadside cannot bear, grey while it reloads. */
+  #placeFan(reading: ReticleReading) {
+    const fan = this.#fan
+    fan.visible = this.#hasAim && (reading.state === "ready" || reading.state === "reloading")
+    if (!fan.visible) return
+    fan.material.color.copy(reading.state === "ready" ? ringColors.ready : ringColors.reloading)
+    const positions = this.#fanPositions
+    const point = this.#fanPoint
+    let v = 0
+    for (const { gun, index } of fanGuns[reading.side]) {
+      const aim = aimGun(this.#ship, gun, this.#aim)
+      const flight = aim.flightTime ?? 0
+      const ball: Cannonball = { id: ballId(0), shooter: this.#ship.id, gun: index, origin: aim.muzzle, velocity: add(aim.muzzleVelocity, scale(aim.barrel, tuning.guns.muzzleSpeed)), firedAt: 0 }
+      for (let k = 0; k < fanSamples - 1; k++) {
+        for (const end of [k, k + 1]) {
+          writeBallPosition(ball, (end / (fanSamples - 1)) * flight, point)
+          positions[v++] = point.x
+          positions[v++] = point.y
+          positions[v++] = point.z
+        }
+      }
+    }
+    const position = fan.geometry.getAttribute("position")
+    position.needsUpdate = true
   }
 
   #fired(ball: Cannonball) {

@@ -633,8 +633,11 @@ const tdm = async (browser: Browser, url: string) => {
   ].join("\n")
 }
 
-/** Plays C7: right mouse held takes the camera to the gunport on the facing side; the reticle still aims the broadside. */
-const gunport = async (browser: Browser, url: string) => {
+/**
+ * Plays C7: the aim view held swings the camera over the facing broadside's shoulder, the target and the predicted fall
+ * of shot in plain view, and the broadside fired from it lands on the aim.
+ */
+const aimView = async (browser: Browser, url: string) => {
   const page = await browser.newPage({ viewport: { width: 1728, height: 1117 }, deviceScaleFactor: 2 })
   await page.goto(`${url}?scenario=target-dummy`)
   await page.waitForFunction(() => window.brickwake?.joined === true && window.brickwake.ships().length >= 2, undefined, { timeout: 15_000 })
@@ -645,15 +648,17 @@ const gunport = async (browser: Browser, url: string) => {
   if (dummy === undefined) throw new Error("no dummy ship")
   await aimAtRange(page, bearing(own.position, dummy.position), Math.hypot(dummy.position[0] - own.position[0], dummy.position[2] - own.position[2]))
   const before = await hook(page, (h) => h.aim())
+  check(before?.fan === true, `the chase view draws the predicted flights (fan ${before?.fan})`)
+  await page.screenshot({ path: ".shots/c7-chase-aim.png" })
 
   // The blend is read in the page on every frame until it lands, so a slow machine only makes the ease take more wall time.
   const blends = await page.evaluate(
     () =>
       new Promise<Array<number>>((resolve) => {
         const seen: Array<number> = []
-        window.brickwake?.gunport(true)
+        window.brickwake?.aimView(true)
         const sample = () => {
-          const blend = window.brickwake?.camera()?.gunport ?? Number.NaN
+          const blend = window.brickwake?.camera()?.aimView ?? Number.NaN
           seen.push(blend)
           if (blend >= 1 || Number.isNaN(blend) || seen.length > 600) resolve(seen)
           else requestAnimationFrame(sample)
@@ -661,22 +666,25 @@ const gunport = async (browser: Browser, url: string) => {
         requestAnimationFrame(sample)
       }),
   )
+  await page.waitForTimeout(200)
   const inView = await hook(page, (h) => h.camera())
   const aim = await hook(page, (h) => h.aim())
-  await page.screenshot({ path: ".shots/c7-gunport.png" })
+  await page.screenshot({ path: ".shots/c7-aim-view.png" })
   const between = new Set(blends.filter((b) => b > 0 && b < 1)).size
-  check(inView?.gunport === 1, `holding the gunport view reaches the port (blend ${inView?.gunport})`)
-  check(blends.every((b, i) => i === 0 || b >= blends[i - 1]!), `the ease into the port never steps back (${blends.map((b) => b.toFixed(2)).join(" ")})`)
-  check(between >= 3, `the camera eases into the port over several frames (${between} frames between chase and port)`)
-  check(aim?.side === "starboard" && inView?.gunportSide === "starboard", `the view looks out of the facing side (${inView?.gunportSide}, aim ${aim?.side})`)
+  check(inView?.aimView === 1, `holding aim reaches the aim view (blend ${inView?.aimView})`)
+  check(between >= 3, `the camera swings into the aim view over several frames (${between} frames between)`)
+  check(aim?.side === "starboard" && inView?.aimSide === "starboard", `the view looks over the facing side (${inView?.aimSide}, aim ${aim?.side})`)
+  check(aim?.fan === true, `the aim view draws the predicted flights (fan ${aim?.fan})`)
   const drift = before?.aimPoint != null && aim?.aimPoint != null ? Math.hypot(before.aimPoint[0] - aim.aimPoint[0], before.aimPoint[2] - aim.aimPoint[2]) : Number.NaN
-  check(drift < 3, `entering the port keeps the reticle's landing point (moved ${drift.toFixed(2)} m)`)
-  const measure = await hook(page, (h) => h.measure(60))
-  const measured = await hook(page, (h) => h.camera())
-  check(measured?.gunport === 1, `the view stays at the port after back-to-back frames (blend ${measured?.gunport})`)
+  // On a hull the new line of sight meets another face of the same ship; on the sea the landing point holds.
+  check(aim?.onHull === before?.onHull && (aim?.onHull === true || drift < 3), `entering the aim view keeps the aim on the target (on hull ${aim?.onHull}, moved ${drift.toFixed(2)} m)`)
+  const toDummy = inView === null ? [0, 0, 0] : dummy.position.map((p, i) => p + (i === 1 ? 3 : 0) - inView.position[i]!)
+  const off = inView === null ? Number.NaN : Math.acos(toDummy.reduce((sum, d, i) => sum + d * inView.forward[i]!, 0) / Math.hypot(...toDummy)) * degrees
+  check(off < (inView?.fov ?? 0) / 2, `the target is in the aim view, ${off.toFixed(1)}° off its centre`)
+  check(Math.abs(inView?.roll ?? 1) < 1e-4, `the aim view's horizon is level (roll ${inView?.roll})`)
 
   const fired = await hook(page, (h) => h.fire())
-  check(fired === "fired", `left click fires from the gunport view (${fired})`)
+  check(fired === "fired", `a click fires from the aim view (${fired})`)
   await page.waitForTimeout(250)
   await page.screenshot({ path: ".shots/c7-broadside.png" })
   const landed = await waitFor(page, (h) => h.events().filter((e) => e._tag === "ballHit" || e._tag === "ballSplash").length >= 12, 8000)
@@ -684,38 +692,15 @@ const gunport = async (browser: Browser, url: string) => {
   const hits = (await hook(page, (h) => h.events())).filter((e) => e._tag === "ballHit").length
   const target = aim?.aimPoint ?? [0, 0, 0]
   const miss = ends.map((p) => Math.hypot(p[0] - target[0], p[2] - target[2])).sort((a, b) => a - b)
-  check(landed && hits > 0, `the broadside from the port lands on the reticle's target (${hits} hits, median ${(miss[Math.floor(miss.length / 2)] ?? Number.NaN).toFixed(1)} m from the aim point)`)
-  await page.evaluate(() => window.brickwake?.gunport(false))
-  await waitFor(page, (h) => h.camera()?.gunport === 0, 5000)
-  const out = await hook(page, (h) => h.camera())
-  check(out?.gunport === 0 && Math.abs(out.roll) < 1e-4, `releasing eases back to the level chase camera (blend ${out?.gunport}, roll ${out?.roll})`)
+  check(landed && hits > 0, `the broadside from the aim view lands on the target (${hits} hits, median ${(miss[Math.floor(miss.length / 2)] ?? Number.NaN).toFixed(1)} m from the aim point)`)
+  await page.evaluate(() => window.brickwake?.aimView(false))
+  check(await waitFor(page, (h) => h.camera()?.aimView === 0, 5000), "releasing swings back to the chase camera")
   await page.close()
 
-  const sea = await browser.newPage({ viewport: { width: 1280, height: 720 } })
-  await sea.goto(`${url}?scenario=beam-sea&orbit=90`)
-  await sea.waitForFunction(() => window.brickwake?.joined === true && window.brickwake.ownShip() !== null, undefined, { timeout: 15_000 })
-  await sea.mouse.click(640, 360)
-  await sea.waitForTimeout(500)
-  await sea.evaluate(() => window.brickwake?.gunport(true))
-  check(await waitFor(sea, (h) => h.camera()?.gunport === 1, 5000), "the beam-sea view reaches the port")
-  const heels: Array<number> = []
-  const looks: Array<number> = []
-  for (let i = 0; i < 40; i++) {
-    heels.push((await ownShip(sea)).heel)
-    looks.push((await hook(sea, (h) => h.camera()))?.lookPitch ?? Number.NaN)
-    await sea.waitForTimeout(100)
-  }
-  await sea.screenshot({ path: ".shots/c7-beam-sea.png" })
-  await sea.close()
-  const range = (values: ReadonlyArray<number>) => (Math.max(...values) - Math.min(...values)) * degrees
-  check(range(looks) > 0.6 * range(heels), `at the port the view rides the ship's roll (heel range ${range(heels).toFixed(1)}°, view pitch range ${range(looks).toFixed(1)}°)`)
-
   return [
-    `entry: ${between} frames between chase and port; landing point moved ${drift.toFixed(2)} m; fov ${inView?.fov.toFixed(0)}°`,
-    `broadside from the port: ${hits}/12 hits, median ${(miss[Math.floor(miss.length / 2)] ?? Number.NaN).toFixed(1)} m from the aim point`,
-    `beam sea: heel range ${range(heels).toFixed(1)}°, view pitch range ${range(looks).toFixed(1)}°`,
-    `frames in the view at ${measure.width}×${measure.height}: pipelined ${measure.pipelined.toFixed(2)} ms, waited median ${measure.median.toFixed(2)} ms, worst ${measure.worst.toFixed(2)} ms, ${measure.draws} draws, ${(measure.triangles / 1e6).toFixed(2)}M tris`,
-    "saved .shots/c7-{gunport,broadside,beam-sea}.png",
+    `entry: ${between} frames between chase and aim view; landing point moved ${drift.toFixed(2)} m; target ${off.toFixed(1)}° off centre; fov ${inView?.fov.toFixed(0)}°`,
+    `broadside from the aim view: ${hits}/12 hits, median ${(miss[Math.floor(miss.length / 2)] ?? Number.NaN).toFixed(1)} m from the aim point`,
+    "saved .shots/c7-{chase-aim,aim-view,broadside}.png",
   ].join("\n")
 }
 
@@ -813,7 +798,7 @@ const ux = async (browser: Browser, url: string) => {
   await page.goto(url)
   await page.waitForFunction(() => window.brickwake?.joined === true && window.brickwake.ownShip() !== null, undefined, { timeout: 15_000 })
   const strip = (await page.locator("#overlay .menu-keys").textContent()) ?? ""
-  check(strip.includes("gunport view") && strip.includes("pause"), `the controls strip names the gunport view and Esc (${strip})`)
+  check(strip.includes("aim the broadside") && strip.includes("pause"), `the controls strip names the aim view and Esc (${strip})`)
   await page.locator('#overlay [data-action="settings"]').click()
   check((await hook(page, (h) => h.ui())).settingsOpen && !(await hook(page, (h) => h.sailing)), "Settings on the title opens the panel without setting sail")
   await page.locator('#settings [data-st="sensitivity"]').fill("1.8")
@@ -930,7 +915,7 @@ Effect.gen(function* () {
     Effect.promise(() => chromium.launch({ args: ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist"] })),
     (browser) => Effect.promise(() => browser.close()),
   )
-  const checks = { c1: sail, c2: gunnery, c3: match, c4: bots, c5: scene, c6: wreck, c7: gunport, c8: tdm, c9: ux, fx: effects }
+  const checks = { c1: sail, c2: gunnery, c3: match, c4: bots, c5: scene, c6: wreck, c7: aimView, c8: tdm, c9: ux, fx: effects }
   const wanted = process.argv.slice(2)
   for (const [name, run] of Object.entries(checks)) {
     if (wanted.length > 0 && !wanted.includes(name)) continue

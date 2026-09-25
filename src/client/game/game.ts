@@ -18,7 +18,6 @@ import { Effects } from "./effects.ts"
 import { type GalleonModel, loadGalleon } from "./galleon.ts"
 import { FrameStats } from "./frame-stats.ts"
 import { Gunnery, type HullAlong } from "./gunnery.ts"
-import { GunDeckLanterns } from "./gunport-view.ts"
 import { HitIndicator } from "./hit-indicator.ts"
 import { Hud, type HudReading } from "./hud.ts"
 import { MatchHud, type MatchReading } from "./match-hud.ts"
@@ -106,7 +105,6 @@ export class Game {
   readonly #wake = new WakeField()
   readonly #galleon: GalleonModel
   readonly #wrecks: Wrecks
-  readonly #lanterns: GunDeckLanterns
   /** Built ships not in play: views are built at load, so a ship joining mid-match costs no frame. */
   readonly #spareViews: Array<ShipView> = []
   readonly #connection: Connection
@@ -178,7 +176,7 @@ export class Game {
   readonly #hint: ControlsHint
   #frameCount = 0
   #lastFrameMs = Number.NaN
-  readonly #hintReading: HintReading = { sailing: false, paused: false, sailLevel: 0, rudder: 0, canFire: false, gunport: false }
+  readonly #hintReading: HintReading = { sailing: false, paused: false, sailLevel: 0, rudder: 0, canFire: false, aim: false }
   readonly #reading: HudReading = { speed: 0, sailLevel: 0, sailSet: 0, rudderAngle: 0, heading: 0, windToward: 0, windSpeed: 0, viewYaw: 0 }
 
   readonly canvas: HTMLCanvasElement
@@ -259,7 +257,6 @@ export class Game {
     this.effects = new Effects(this.scene, sunDirection)
     this.#galleon = loadGalleon()
     this.#wrecks = new Wrecks(this.#galleon.graph)
-    this.#lanterns = new GunDeckLanterns(this.scene, this.#galleon)
     this.#debris = new BrickDebris(this.scene, this.#galleon, this.effects, this.audio)
     for (let i = 0; i < tuning.match.maxShips; i++) this.#spareViews.push(new ShipView(`spare ${i}`, this.#galleon))
     // Compile every ship shader now, so the first ship in view costs no frame.
@@ -268,7 +265,6 @@ export class Game {
       this.scene.add(warm.group)
       const debris = this.#debris.warm()
       this.renderer.compile(this.scene, new PerspectiveCamera())
-      this.#lanterns.compileLit(() => this.renderer.compile(this.scene, new PerspectiveCamera()))
       debris.done()
       this.scene.remove(warm.group)
     }
@@ -477,7 +473,7 @@ export class Game {
         this.#ocean = new OceanSurface(message.sea, { sky: this.#sky.cube, sun: sunColor, sunDirection, flashColor }, wakePeriod)
         this.scene.add(this.#ocean.mesh)
         const crest = message.sea.waves.reduce((sum, wave) => sum + wave.amplitude, 0)
-        const camera = this.#camera ?? new ChaseCamera(crest + cameraClearance, this.#galleon.guns)
+        const camera = this.#camera ?? new ChaseCamera(crest + cameraClearance)
         this.#camera = camera
         camera.sensitivity = this.#settings.sensitivity
         const own = message.ships.find((ship) => ship.id === message.shipId)
@@ -640,7 +636,6 @@ export class Game {
       // A foundering ship drags the camera no lower than the sea surface: the captain watches it go.
       const manning = pose.life === "afloat" && this.#phase._tag !== "ended" ? own.view.group : undefined
       camera.follow(pose.x, pose.life === "afloat" ? pose.y : Math.max(pose.y, 0), pose.z, dt, manning)
-      this.#lanterns.update(manning, camera.gunport)
       this.#sun.target.position.set(pose.x, 0, pose.z)
       this.#sun.position.copy(sunDirection).multiplyScalar(shadowReach).add(this.#sun.target.position)
       const forwardX = 1 - 2 * (pose.qy * pose.qy + pose.qz * pose.qz)
@@ -663,7 +658,7 @@ export class Game {
       hint.sailLevel = pose.sail
       hint.rudder = pose.rudder
       hint.canFire = this.#gunnery.canFire
-      hint.gunport = camera.gunport.held
+      hint.aim = camera.aimView.held
       this.#hint.update(dt, hint)
     }
     this.#wake.render(this.renderer, dt)
@@ -695,7 +690,6 @@ export class Game {
       const light = lights[i]
       if (light !== undefined) ocean.flashes[i]?.set(light.position.x, light.position.y, light.position.z, light.intensity)
     }
-    this.#lanterns.dimFlashes(this.effects.flashLights, camera.camera.position, camera.gunport)
     this.audio.update(dt, camera.camera, own?.view.pose, this.#wind.speed, this.#phase._tag)
     for (let i = 0; i < this.hooks.length; i++) this.hooks[i]?.(frame)
 

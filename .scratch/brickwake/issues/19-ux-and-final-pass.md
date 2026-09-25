@@ -49,17 +49,17 @@ Resolved. `bun run typecheck` is clean and `bun test` passes 158 of 158. Each `b
 - **Controls**:
   - `W`/`S`: sail up/down
   - `A`/`D`: rudder
-  - mouse: look and aim (the reticle is where the ball lands; lead moving ships)
-  - click: fire the broadside facing the camera
-  - hold right mouse: gunport view
-  - wheel: zoom
+  - mouse: look and aim; left/right turns the aim, up aims farther, down nearer. Gold arcs show each gun's flight and the band where the balls land; lead moving ships
+  - hold `Space` or right mouse: aim view over the shoulder of the facing broadside, with nothing of your own ship in the way
+  - click or `F`: fire the broadside facing the aim
+  - wheel or `Q`/`E`: zoom (in the aim view, magnify)
   - `Tab`: scoreboard
   - `Esc`: pause and settings
 - **Try first**:
   1. Raise full sail on a beam reach.
   2. Close to about 150 m and put the reticle on an enemy's hull at the waterline.
   3. Fire, then watch bricks fly and the hull hole.
-  4. Try the gunport view for a long shot.
+  4. Hold `Space` to aim a long shot.
   5. Sink one, and watch its masts snap and the plunge.
   6. Then play a TDM round.
 - **Settings**: Esc → Settings, or the link on the title screen. Drop to Medium or Low if frames stutter.

@@ -40,7 +40,7 @@ const reasonText: Record<ReticleState, string> = {
   "no-aim": "No target",
 }
 
-/** The screen-centre reticle: facing side, reload ring, range or why it can't fire, and the hit marker. Writes the DOM only on change. */
+/** The reticle over the aim point: facing side, reload ring, range or why it can't fire, and the hit marker. Writes the DOM only on change. */
 export class Reticle {
   readonly #root: HTMLElement
   readonly #load: SVGCircleElement
@@ -51,6 +51,8 @@ export class Reticle {
   #lastSide = ""
   #lastFigure = Number.NaN
   #lastLoad = -1
+  #lastLeft = ""
+  #lastTop = ""
 
   constructor(root: HTMLElement) {
     this.#root = root
@@ -99,6 +101,14 @@ export class Reticle {
       this.#lastLoad = load
       this.#load.style.strokeDashoffset = String(ringLength * (1 - load))
     }
+  }
+
+  /** Centres the reticle on a point in normalized device coordinates, held inside the screen edges. */
+  place(x: number, y: number): void {
+    const left = `${(50 + 50 * Math.max(-0.97, Math.min(0.97, x))).toFixed(2)}%`
+    const top = `${(50 - 50 * Math.max(-0.95, Math.min(0.95, y))).toFixed(2)}%`
+    if (left !== this.#lastLeft) this.#root.style.left = this.#lastLeft = left
+    if (top !== this.#lastTop) this.#root.style.top = this.#lastTop = top
   }
 
   /** Flashes the hit marker: one of your balls struck a hull. */
