@@ -1,6 +1,7 @@
 import { Schema } from "effect"
 import { ballId, type Cannonball } from "../sim/gunnery.ts"
 import type { MatchEvent, MatchState } from "../sim/match.ts"
+import type { MatchPhase } from "../sim/rules.ts"
 import { shipId, type ShipId, type ShipState } from "../sim/ship.ts"
 import { vec3, type Vec3 } from "../sim/vector.ts"
 import { scenarios, type ScenarioName } from "../sim/scenarios.ts"
@@ -45,6 +46,35 @@ export const WindSnapshot = Schema.Struct({ toward: Schema.Finite, speed: Schema
 /** Wire form of `WindSnapshot`. */
 export interface WindSnapshot extends Schema.Schema.Type<typeof WindSnapshot> {}
 
+/** A ship's life, as in `ShipLife`. */
+export const ShipLifeSchema = Schema.TaggedUnion({
+  afloat: {},
+  sinking: { since: Schema.Finite, floodEnd: Schema.Literals([1, -1]) },
+  sunk: { respawnAt: Schema.Finite },
+})
+
+/** How the match is paced and won, as in `MatchRules`; fixed for a room, sent on join. */
+export const MatchRulesSchema = Schema.Struct({
+  mode: Schema.Literal("ffa"),
+  scoreLimit: Schema.Int,
+  timeLimit: Schema.Finite,
+  warmupSeconds: Schema.Finite,
+  endedSeconds: Schema.Finite,
+})
+
+/** Who won, as in `MatchWinner`; null on a draw. */
+export const MatchWinnerSchema = Schema.NullOr(Schema.TaggedUnion({ ship: { shipId: ShipIdSchema } }))
+
+/** Where the match is in its lifecycle, as in `MatchPhase`; times are sim seconds. */
+export const MatchPhaseSchema = Schema.TaggedUnion({
+  warmup: { endsAt: Schema.Finite },
+  playing: { endsAt: Schema.Finite },
+  ended: { restartAt: Schema.Finite, winner: MatchWinnerSchema },
+})
+
+/** Wire form of `MatchPhase`. */
+export type MatchPhaseSnapshot = typeof MatchPhaseSchema.Type
+
 /** What a client needs to draw one ship at one tick. Axes and units as in `ShipState`. */
 export const ShipSnapshot = Schema.Struct({
   id: ShipIdSchema,
@@ -58,6 +88,11 @@ export const ShipSnapshot = Schema.Struct({
   hp: Schema.Finite,
   /** Sim time, seconds, from which the `[port, starboard]` guns may fire again. */
   reloadedAt: Schema.Tuple([Schema.Finite, Schema.Finite]),
+  life: ShipLifeSchema,
+  /** Changes when the ship respawns or the match restarts: clients must not interpolate across it. */
+  spawn: Schema.Int,
+  kills: Schema.Int,
+  deaths: Schema.Int,
 })
 
 /** Wire form of one ship. */
@@ -93,6 +128,10 @@ export const ServerEvent = Schema.TaggedUnion({
   },
   /** A ball met the wave surface at sim time `time`. */
   ballSplash: { tick: Schema.Int, time: Schema.Finite, ballId: Schema.Int, point: Vec3Tuple },
+  /** A ship's HP reached 0 at sim time `time`; `by` sank it (null when no ship did). */
+  shipSunk: { tick: Schema.Int, time: Schema.Finite, shipId: ShipIdSchema, by: Schema.NullOr(ShipIdSchema) },
+  /** A ship re-entered on the spawn ring, after sinking or at a restart. */
+  shipRespawned: { tick: Schema.Int, shipId: ShipIdSchema },
 })
 
 /** A server event. */
@@ -101,7 +140,12 @@ export type ServerEvent = typeof ServerEvent.Type
 /** Every message a client may send. The server treats each as untrusted and decodes it. */
 export const ClientMessage = Schema.TaggedUnion({
   /** Quick play: take a ship in a room of `mode` with space, or a new room. `scenario` starts a private room from that start state instead. */
-  join: { mode: Schema.Literal("ffa"), scenario: Schema.optionalKey(ScenarioNameSchema) },
+  join: {
+    mode: Schema.Literal("ffa"),
+    scenario: Schema.optionalKey(ScenarioNameSchema),
+    /** With `scenario`: joins the private room of that scenario opened under this name while it has a free seat. */
+    room: Schema.optionalKey(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(32))),
+  },
   leave: {},
   setHelm: { rudder: Schema.Literals([-1, 0, 1]) },
   setSail: { level: Schema.Literals([0, 1, 2]) },
@@ -120,12 +164,15 @@ export const ServerMessage = Schema.TaggedUnion({
     simHz: Schema.Int,
     tick: Schema.Int,
     sea: SeaStateSchema,
+    rules: MatchRulesSchema,
+    phase: MatchPhaseSchema,
     wind: WindSnapshot,
     ships: Schema.Array(ShipSnapshot),
   },
   /** The full world after a tick, with the events that tick produced. Sent every tick. */
   snapshot: {
     tick: Schema.Int,
+    phase: MatchPhaseSchema,
     wind: WindSnapshot,
     ships: Schema.Array(ShipSnapshot),
     events: Schema.Array(ServerEvent),
@@ -163,7 +210,15 @@ export const shipSnapshot = (ship: ShipState): ShipSnapshot => ({
   sailSet: round(ship.sailSet, 4),
   hp: ship.hp,
   reloadedAt: [round(ship.reloadedAt.port, 4), round(ship.reloadedAt.starboard, 4)],
+  life: ship.life._tag === "sinking" ? { ...ship.life, since: round(ship.life.since, 4) } : ship.life,
+  spawn: ship.spawn,
+  kills: ship.kills,
+  deaths: ship.deaths,
 })
+
+/** The match phase on the wire. */
+export const phaseSnapshot = (phase: MatchPhase): MatchPhaseSnapshot =>
+  phase._tag === "ended" ? { ...phase, winner: phase.winner ?? null } : phase
 
 /** The wind as clients see it. */
 export const windSnapshot = (state: MatchState): WindSnapshot => ({ toward: round(state.wind.toward, 4), speed: round(state.wind.speed, 2) })
@@ -195,6 +250,10 @@ export const serverEvent = (event: MatchEvent): ServerEvent => {
       return { ...event, time: round(event.time, 6), point: tuple(event.point, 3), localPoint: tuple(event.localPoint, 3) }
     case "ballSplash":
       return { ...event, time: round(event.time, 6), point: tuple(event.point, 3) }
+    case "shipSunk":
+      return { ...event, time: round(event.time, 6), by: event.by ?? null }
+    case "shipRespawned":
+      return event
   }
 }
 

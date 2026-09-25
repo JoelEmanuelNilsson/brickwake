@@ -4,7 +4,7 @@ import { HttpServer } from "effect/unstable/http"
 import { ballFromWire, ServerMessageJson, type ServerMessage } from "../protocol/messages.ts"
 import { ballPositionAt } from "../sim/gunnery.ts"
 import { seas, swell } from "../sim/ocean.ts"
-import { dummyShipId, scenarioShipId } from "../sim/scenarios.ts"
+import { dummyShipId, duelShipIds, scenarioShipId } from "../sim/scenarios.ts"
 import { SIM_HZ } from "../sim/tuning.ts"
 import type { NetworkLag } from "./lag.ts"
 import * as Server from "./server.ts"
@@ -277,4 +277,34 @@ test("a broadside at the target dummy fires, hits and lowers its HP; refusals sa
   const last = client.snapshots().at(-1)!.snapshot.ships.find((ship) => ship.id === dummyShipId)!
   expect(last.hp).toBe(100 - 5 * hits.length)
   await client.close()
+})
+
+test("two clients naming one duel room share it; A sinks B and the wire carries the sink, the score and the phase", async () => {
+  const first = await connect(server.url)
+  const second = await connect(server.url)
+  const stranger = await connect(server.url)
+  first.send({ _tag: "join", mode: "ffa", scenario: "duel", room: "wire-test" })
+  const welcomeA = await first.nextOf("welcome", 0)
+  second.send({ _tag: "join", mode: "ffa", scenario: "duel", room: "wire-test" })
+  const welcomeB = await second.nextOf("welcome", 0)
+  stranger.send({ _tag: "join", mode: "ffa", scenario: "duel", room: "other" })
+  expect((await stranger.nextOf("welcome", 0)).shipId).toBe(duelShipIds[0])
+  expect([welcomeA.shipId, welcomeB.shipId]).toEqual([...duelShipIds])
+  expect(welcomeA.rules).toMatchObject({ mode: "ffa", timeLimit: 30 })
+  expect(welcomeA.phase).toMatchObject({ _tag: "playing" })
+  const target = welcomeB.ships.find((ship) => ship.id === duelShipIds[1])!
+  const sunk = second.next(
+    (message): message is Snapshot => message._tag === "snapshot" && message.events.some((event) => event._tag === "shipSunk"),
+  )
+  for (let volley = 0; volley < 3; volley++) {
+    first.send({ _tag: "fireBroadside", side: "starboard", aimPoint: [target.position[0], 0, target.position[2]] })
+    const done = await Promise.race([sunk.then(() => true), sleep(6100).then(() => false)])
+    if (done) break
+  }
+  const snapshot = await sunk
+  expect(snapshot.events.find((event) => event._tag === "shipSunk")).toMatchObject({ shipId: duelShipIds[1], by: duelShipIds[0] })
+  const ships = new Map(snapshot.ships.map((ship) => [ship.id, ship]))
+  expect(ships.get(duelShipIds[0])).toMatchObject({ kills: 1 })
+  expect(ships.get(duelShipIds[1])).toMatchObject({ deaths: 1, hp: 0, life: { _tag: "sinking" } })
+  await Promise.all([first.close(), second.close(), stranger.close()])
 })

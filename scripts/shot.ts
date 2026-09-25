@@ -221,6 +221,139 @@ const gunnery = async (browser: Browser, url: string) => {
   ].join("\n")
 }
 
+/** Opens a page in the named duel room and sets sail; the first page takes the first duel ship. */
+const joinDuel = async (browser: Browser, url: string, room: string) => {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } })
+  await page.goto(`${url}?scenario=duel&room=${room}`)
+  await page.waitForFunction(() => window.brickwake?.joined === true && window.brickwake.ownShip() !== null, undefined, { timeout: 15_000 })
+  await page.mouse.click(640, 360)
+  return page
+}
+
+const matchOf = async (page: Page) => {
+  const match = await hook(page, (h) => h.match())
+  if (match === null) throw new Error("the client shows no match")
+  return match
+}
+
+/** Plays C3 in two browsers: A sinks B, B founders by bow or stern and respawns, the short match ends with results and restarts. */
+const match = async (browser: Browser, url: string) => {
+  const room = `c3-${Date.now()}`
+  const a = await joinDuel(browser, url, room)
+  const b = await joinDuel(browser, url, room)
+  const [idA, idB] = [await hook(a, (h) => h.shipId), await hook(b, (h) => h.shipId)]
+  check(idA === "duel-a" && idB === "duel-b", `the two browsers share one duel room (${idA}, ${idB})`)
+  check(await waitFor(a, (h) => h.ships().length === 2, 3000), "A sees both ships")
+  const opening = await matchOf(a)
+  check(opening.phase._tag === "playing" && opening.hud.clock !== "", `the match is on with a clock (${opening.phase._tag} ${opening.hud.clock})`)
+  await a.screenshot({ path: ".shots/c3-hud.png" })
+
+  const ownA = await ownShip(a)
+  const target = await shipById(a, "duel-b")
+  const range = Math.hypot(target.position[0] - ownA.position[0], target.position[2] - ownA.position[2])
+  let volleys = 0
+  let sank = false
+  let hitShot = false
+  while (!sank && volleys < 4) {
+    await a.waitForFunction(() => (window.brickwake?.aim()?.reloadLeft ?? 1) === 0 || window.brickwake?.aim()?.state === "ready", undefined, { timeout: 8000 })
+    await aimAtRange(a, bearing(ownA.position, target.position), range)
+    check((await hook(a, (h) => h.fire())) === "fired", `A's broadside ${volleys + 1} fires`)
+    volleys++
+    // B looks away from A so the hit-direction arc has to point behind the view.
+    await b.evaluate((yaw) => window.brickwake?.orbit(yaw, 0.15), bearing(target.position, ownA.position) + 2.2)
+    const hpBefore = (await ownShip(b)).hp
+    const hit = await b.waitForFunction((before) => (window.brickwake?.ownShip()?.hp ?? 100) < before, hpBefore, { timeout: 4000 }).then(
+      () => true,
+      () => false,
+    )
+    if (hit) {
+      if (!hitShot) {
+        await b.waitForTimeout(150)
+        await b.screenshot({ path: ".shots/c3-hit-direction.png" })
+        hitShot = true
+      }
+    }
+    sank = await waitFor(b, (h) => h.ownShip()?.life !== "afloat", 2500)
+  }
+  check(sank, `A sinks B (${volleys} broadsides)`)
+  const sunkEvent = await hook(a, (h) => h.events().find((e) => e._tag === "shipSunk"))
+  check(sunkEvent?._tag === "shipSunk" && sunkEvent.shipId === "duel-b" && sunkEvent.by === "duel-a", `the sink is B's, by A (${JSON.stringify(sunkEvent)})`)
+
+  // B's captain watches from off the beam as the chase camera holds at the surface; A sees it go from 150 m.
+  const wreck = await ownShip(b)
+  await b.evaluate((yaw) => window.brickwake?.orbit(yaw, 0.1, 42), wreck.heading + Math.PI / 2 + 0.25)
+  await a.evaluate((yaw) => window.brickwake?.orbit(yaw, 0.05, 30), bearing(ownA.position, wreck.position) + 0.3)
+  const pitches: Array<number> = []
+  for (const [i, wait] of [300, 900, 900, 900].entries()) {
+    await b.waitForTimeout(wait)
+    const ship = await shipOrNull(b, "duel-b")
+    if (ship !== null) pitches.push(ship.pitch)
+    await b.screenshot({ path: `.shots/c3-sinking-${i + 1}.png` })
+    if (i === 2) await a.screenshot({ path: ".shots/c3-sinking-far.png" })
+  }
+  const settle = Math.max(...pitches.map(Math.abs)) * degrees
+  check(settle > 12, `B settles by the bow or stern as it sinks (${settle.toFixed(1)}°)`)
+  const bView = await matchOf(b)
+  await b.screenshot({ path: ".shots/c3-sunk-b.png" })
+  check(bView.hud.banner.includes("Back on the water in"), `B sees its respawn countdown ("${bView.hud.banner}")`)
+  const aView = await matchOf(a)
+  check(aView.hud.feed.some((line) => line.includes("☠")), `A's kill feed shows the sink (${JSON.stringify(aView.hud.feed)})`)
+  check((await ownShip(a)).kills === 1 && aView.hud.standing.startsWith("1 sink"), `A scores the sink ("${aView.hud.standing}")`)
+  await a.screenshot({ path: ".shots/c3-kill-feed.png" })
+
+  check(await waitFor(b, (h) => h.ownShip()?.life === "afloat" && (h.ownShip()?.spawn ?? 0) >= 2, 12_000), "B respawns")
+  const reborn = await ownShip(b)
+  check(reborn.hp === 100 && Math.abs(Math.hypot(reborn.position[0], reborn.position[2]) - 260) < 5, `B is back at full HP on the spawn ring (${reborn.hp} HP)`)
+  await b.screenshot({ path: ".shots/c3-respawn-b.png" })
+
+  await a.keyboard.down("Tab")
+  await a.waitForTimeout(300)
+  const board = await matchOf(a)
+  await a.screenshot({ path: ".shots/c3-scoreboard.png" })
+  await a.keyboard.up("Tab")
+  check(board.hud.scoreboard?.rows === 2, `Tab shows the scoreboard (${JSON.stringify(board.hud.scoreboard)})`)
+
+  const endsIn = opening.phase._tag === "playing" ? opening.phase.endsAt - opening.renderTime : 30
+  check(await waitFor(a, (h) => h.match()?.phase._tag === "ended", (endsIn + 5) * 1000), "the short-timer match ends")
+  await a.waitForTimeout(600)
+  const [endA, endB] = [await matchOf(a), await matchOf(b)]
+  check(endA.hud.scoreboard?.verdict === "Victory" && endB.hud.scoreboard?.verdict === "Defeat", `results: A ${endA.hud.scoreboard?.verdict}, B ${endB.hud.scoreboard?.verdict}`)
+  await a.screenshot({ path: ".shots/c3-results-a.png" })
+  await b.screenshot({ path: ".shots/c3-results-b.png" })
+  const reload = await hook(a, (h) => h.fire())
+  check(reload !== "fired", `the guns are silent after the match (${reload})`)
+
+  check(await waitFor(a, (h) => h.match()?.phase._tag === "playing", 10_000), "the match restarts")
+  await a.waitForTimeout(400)
+  const [restartA, restartB] = [await ownShip(a), await ownShip(b)]
+  const restarted = await matchOf(a)
+  check(restartA.kills === 0 && restartB.deaths === 0 && restartA.spawn >= 2, `scores reset and ships respawn at the restart (A spawn ${restartA.spawn})`)
+  check(restarted.hud.scoreboard === null, "the results close when the next match begins")
+  await a.screenshot({ path: ".shots/c3-restart.png" })
+  const frames = await hook(a, (h) => h.frames())
+  await Promise.all([a.close(), b.close()])
+
+  // Quick play opens in warmup.
+  const quick = await browser.newPage({ viewport: { width: 1280, height: 720 } })
+  await quick.goto(url)
+  await quick.waitForFunction(() => window.brickwake?.joined === true && window.brickwake.ownShip() !== null, undefined, { timeout: 15_000 })
+  await quick.mouse.click(640, 360)
+  await quick.waitForTimeout(500)
+  const warmup = await matchOf(quick)
+  check(warmup.phase._tag === "warmup" && warmup.hud.phase === "Warmup", `quick play starts in warmup (${warmup.phase._tag})`)
+  await quick.screenshot({ path: ".shots/c3-warmup.png" })
+  await quick.close()
+
+  return [
+    `A sank B with ${volleys} broadside(s); B settled ${settle.toFixed(1)}° by the ${sunkEvent?._tag === "shipSunk" ? "struck end" : "?"}`,
+    `results: A ${endA.hud.scoreboard?.verdict}, B ${endB.hud.scoreboard?.verdict}; restart A spawn ${restartA.spawn}`,
+    `frames (duel): cpu ${frames.cpuMs.toFixed(2)} ms, gpu ${frames.gpuMs.toFixed(2)} ms, interval ${frames.intervalMs.toFixed(2)} ms`,
+    "saved .shots/c3-{hud,hit-direction,sinking-1..4,sinking-far,sunk-b,kill-feed,respawn-b,scoreboard,results-a,results-b,restart,warmup}.png",
+  ].join("\n")
+}
+
+const shipOrNull = (page: Page, id: string) => page.evaluate((id) => window.brickwake?.ships().find((s) => s.id === id) ?? null, id)
+
 const freePort = async () => {
   const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() })
   const port = probe.port
@@ -254,7 +387,7 @@ Effect.gen(function* () {
     Effect.promise(() => chromium.launch({ args: ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist"] })),
     (browser) => Effect.promise(() => browser.close()),
   )
-  const checks = { c1: sail, c2: gunnery }
+  const checks = { c1: sail, c2: gunnery, c3: match }
   const wanted = process.argv.slice(2)
   for (const [name, run] of Object.entries(checks)) {
     if (wanted.length > 0 && !wanted.includes(name)) continue

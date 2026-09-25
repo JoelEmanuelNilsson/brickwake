@@ -7,6 +7,7 @@ import type { ConnectionState } from "./connection.ts"
 import type { Effects } from "./effects.ts"
 import type { AimReading, FireOutcome, Gunnery } from "./gunnery.ts"
 import type { HelmRequest } from "./controls.ts"
+import type { MatchHud, MatchHudText, MatchReading } from "./match-hud.ts"
 import type { FrameAverages, FrameStats } from "./frame-stats.ts"
 import type { ShipPose, SnapshotTimeline } from "./timeline.ts"
 
@@ -28,6 +29,20 @@ export interface DebugShip {
   readonly hp: number
   /** Sim time, seconds, from which `[port, starboard]` may fire again. */
   readonly reloadedAt: readonly [number, number]
+  readonly life: ShipPose["life"]
+  readonly kills: number
+  readonly deaths: number
+  /** Changes on each respawn or restart. */
+  readonly spawn: number
+}
+
+/** The match as the client shows it. */
+export interface DebugMatch {
+  readonly phase: MatchReading["phase"]
+  readonly rules: MatchReading["rules"]
+  /** Sim time drawn now; compare with the phase's times. */
+  readonly renderTime: number
+  readonly hud: MatchHudText
 }
 
 /** Live effects: particles per layer, chips, balls drawn in flight, and camera shake 0…1. */
@@ -66,6 +81,7 @@ export interface BrickwakeDebug {
   /** Where the reticle aims on the drawn sea, the facing side, and whether it can fire. */
   aim(): AimReading | null
   effects(): DebugEffects
+  match(): DebugMatch | null
   /** Test control: fires as a left click does (headless browsers refuse the pointer lock clicks need). */
   fire(): FireOutcome
   /** Test control: fires the side facing `point` at that point on the sea. */
@@ -95,6 +111,8 @@ export interface DebugSource {
   readonly sea: () => SeaState | undefined
   readonly gunnery: () => Gunnery
   readonly effects: () => Effects
+  readonly match: () => MatchReading
+  readonly matchHud: () => MatchHud
 }
 
 const describeShip = (id: string, pose: ShipPose, sea: SeaState | undefined, time: number): DebugShip => {
@@ -116,6 +134,10 @@ const describeShip = (id: string, pose: ShipPose, sea: SeaState | undefined, tim
     waterHeight: sea === undefined ? 0 : sampleOcean(sea, pose.x, pose.z, time).height,
     hp: pose.hp,
     reloadedAt: [pose.reloadPort, pose.reloadStarboard],
+    life: pose.life,
+    kills: pose.kills,
+    deaths: pose.deaths,
+    spawn: pose.spawn,
   }
 }
 
@@ -166,6 +188,11 @@ export const installDebugHook = (source: DebugSource): void => {
       ballsInFlight: source.gunnery().balls.inFlight,
       shake: source.camera()?.trauma ?? 0,
     }),
+    match: () => {
+      if (source.shipId() === null) return null
+      const reading = source.match()
+      return { phase: reading.phase, rules: reading.rules, renderTime: reading.renderTime, hud: source.matchHud().shown() }
+    },
     fire: () => source.gunnery().fire(),
     fireAt: ([x, y, z]) => source.gunnery().fire({ x, y, z }),
     orbit: (yaw, pitch, distance) => {

@@ -1,5 +1,6 @@
 import { Clock, Context, Effect, Fiber, Layer, Random, Schema, Semaphore } from "effect"
 import {
+  phaseSnapshot,
   serverEvent,
   ServerMessageJson,
   shipSnapshot,
@@ -10,7 +11,7 @@ import {
 } from "../protocol/messages.ts"
 import { addShip, createMatch, removeShip, spawnPoint, stepMatch, type BroadsideOrder, type MatchState } from "../sim/match.ts"
 import { seas } from "../sim/ocean.ts"
-import { scenarios, scenarioShipId } from "../sim/scenarios.ts"
+import { scenarios, scenarioSeats, type ScenarioName } from "../sim/scenarios.ts"
 import { shipId, type ShipControls, type ShipId } from "../sim/ship.ts"
 import { SIM_DT, SIM_HZ, tuning } from "../sim/tuning.ts"
 import { makeWind } from "../sim/wind.ts"
@@ -43,8 +44,8 @@ export class Service extends Context.Service<Service, Interface>()("brickwake/Ro
 
 interface Room {
   readonly id: number
-  /** Scenario rooms are private: quick play never puts anyone else in them. */
-  readonly isPrivate: boolean
+  /** Scenario rooms are private: quick play never puts anyone in them; only a join naming the same scenario and room does. */
+  readonly scenario: { readonly name: ScenarioName; readonly room: string | undefined } | undefined
   state: MatchState
   /** Controls to apply on the next tick, by ship. */
   commands: Map<ShipId, ShipControls>
@@ -78,6 +79,7 @@ const stepRoom = (room: Room) => {
   return broadcast(room, {
     _tag: "snapshot",
     tick: room.state.tick,
+    phase: phaseSnapshot(room.state.phase),
     wind: windSnapshot(room.state),
     ships: room.state.ships.map(shipSnapshot),
     events,
@@ -119,11 +121,11 @@ export const make = Effect.gen(function* () {
   const lifecycle = yield* Semaphore.make(1)
   let roomsOpened = 0
 
-  const openRoom = (state: MatchState, isPrivate: boolean) =>
+  const openRoom = (state: MatchState, scenario: Room["scenario"]) =>
     Effect.gen(function* () {
       const room: Room = {
         id: ++roomsOpened,
-        isPrivate,
+        scenario,
         state,
         commands: new Map(),
         orders: new Map(),
@@ -139,10 +141,27 @@ export const make = Effect.gen(function* () {
 
   const quickPlayRoom = Effect.gen(function* () {
     for (const room of rooms.values()) {
-      if (!room.isPrivate && room.state.ships.length < tuning.match.maxShips) return room
+      if (room.scenario === undefined && room.state.ships.length < tuning.match.maxShips) return room
     }
-    return yield* openRoom(yield* quickPlayMatch, false)
+    return yield* openRoom(yield* quickPlayMatch, undefined)
   })
+
+  const freeSeat = (room: Room, name: ScenarioName) =>
+    scenarioSeats(name).find((id) => !room.members.has(id) && room.state.ships.some((ship) => ship.id === id))
+
+  const scenarioRoom = (name: ScenarioName, roomName: string | undefined) =>
+    Effect.gen(function* () {
+      if (roomName !== undefined)
+        for (const room of rooms.values()) {
+          if (room.scenario?.name !== name || room.scenario.room !== roomName) continue
+          const seat = freeSeat(room, name)
+          if (seat !== undefined) return { room, id: seat }
+        }
+      const room = yield* openRoom(scenarios[name], { name, room: roomName })
+      const id = freeSeat(room, name)
+      if (id === undefined) return yield* Effect.die(`scenario ${name} has no seat`)
+      return { room, id }
+    })
 
   const leave = (room: Room, id: ShipId) =>
     Effect.gen(function* () {
@@ -176,9 +195,14 @@ export const make = Effect.gen(function* () {
 
   const join = Effect.fn("Rooms.join")(
     function* (request: JoinRequest, send: Send) {
-      const room = request.scenario === undefined ? yield* quickPlayRoom : yield* openRoom(scenarios[request.scenario], true)
-      const id = request.scenario === undefined ? shipId(`ship-${++room.shipsJoined}`) : scenarioShipId
-      if (request.scenario === undefined) room.state = addShip(room.state, spawnPoint(room.state, id))
+      const { room, id } =
+        request.scenario === undefined
+          ? yield* Effect.map(quickPlayRoom, (room) => {
+              const id = shipId(`ship-${++room.shipsJoined}`)
+              room.state = addShip(room.state, spawnPoint(room.state, id))
+              return { room, id }
+            })
+          : yield* scenarioRoom(request.scenario, request.room)
       room.members.set(id, send)
       room.events.push({ _tag: "shipJoined", tick: room.state.tick, shipId: id })
       yield* send(
@@ -188,6 +212,8 @@ export const make = Effect.gen(function* () {
           simHz: SIM_HZ,
           tick: room.state.tick,
           sea: room.state.sea,
+          rules: room.state.rules,
+          phase: phaseSnapshot(room.state.phase),
           wind: windSnapshot(room.state),
           ships: room.state.ships.map(shipSnapshot),
         }),

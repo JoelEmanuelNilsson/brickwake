@@ -159,9 +159,29 @@ export const tuning = {
     /** HP one ball takes off the hull it hits. */
     perBall: 5,
   },
+  sinking: {
+    /** Seconds from HP 0 until the ship is under and out of play; it takes no orders and cannot be hit meanwhile. */
+    seconds: 4,
+    /** Seconds a sunk ship waits before it respawns. */
+    respawnSeconds: 5,
+    /** Seconds one buoyancy column takes to flood, and how much later the far end starts than the flooding end. */
+    floodSeconds: 0.8,
+    floodSpread: 2.0,
+    /** Quadratic drag on a flooded hull's vertical speed through the water, N per (m/s)²: ~200 m² of hull plan at drag coefficient 1. */
+    drag: 1.0e5,
+  },
+  collision: {
+    /** Each hull's footprint for ship–ship contact: a capsule along the keel, x from −half to +half, this radius. */
+    halfLength: 10,
+    radius: 4,
+    /** Share of closing speed that bounces back; wooden hulls barely do. */
+    restitution: 0.2,
+  },
   match: {
     /** Ships a room holds, humans and bots together. */
     maxShips: 12,
+    /** FFA: first to `scoreLimit` sinks or the most after `timeLimit` seconds. Warmup before, results after. */
+    ffa: { scoreLimit: 10, timeLimit: 8 * 60, warmupSeconds: 10, endedSeconds: 12 },
     /** Joining ships start on this ring about the arena centre, in the free slot farthest from others. */
     spawnRing: { radius: 260, slots: 12 },
   },

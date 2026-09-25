@@ -72,6 +72,10 @@ export class Gunnery {
     sailSet: 0,
     hp: 0,
     reloadedAt: { port: 0, starboard: 0 },
+    life: { _tag: "afloat" } as const,
+    spawn: 0,
+    kills: 0,
+    deaths: 0,
   }
   readonly #aimScratch = { x: 0, y: 0, z: 0 }
   readonly #q = new Quaternion()

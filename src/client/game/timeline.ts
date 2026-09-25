@@ -23,6 +23,12 @@ export class ShipPose {
   /** Sim time, seconds, from which each side may fire again. */
   reloadPort = 0
   reloadStarboard = 0
+  life: ShipSnapshot["life"]["_tag"] = "afloat"
+  /** Sim time the ship started sinking (while `sinking`), or respawns (while `sunk`). */
+  lifeTime = 0
+  spawn = 0
+  kills = 0
+  deaths = 0
 }
 
 interface Entry {
@@ -111,7 +117,8 @@ export class SnapshotTimeline {
     if (a === undefined) return false
     const next = this.#bracket + 1 < this.#count ? this.#at(this.#bracket + 1) : undefined
     const b = next?.byId.get(id)
-    if (next === undefined || b === undefined) {
+    // A respawn or restart moves the ship without sailing there: hold the old pose until the new one is due.
+    if (next === undefined || b === undefined || b.spawn !== a.spawn) {
       write(out, a, a, 0)
       return true
     }
@@ -144,6 +151,11 @@ const write = (out: ShipPose, a: ShipSnapshot, b: ShipSnapshot, u: number) => {
   out.hp = b.hp
   out.reloadPort = b.reloadedAt[0]
   out.reloadStarboard = b.reloadedAt[1]
+  out.life = b.life._tag
+  out.lifeTime = b.life._tag === "sinking" ? b.life.since : b.life._tag === "sunk" ? b.life.respawnAt : 0
+  out.spawn = b.spawn
+  out.kills = b.kills
+  out.deaths = b.deaths
   // Normalized lerp on the shorter arc: ticks are 33 ms apart, where it matches slerp to well under a pixel.
   const [ax, ay, az, aw] = a.orientation
   const [bx0, by0, bz0, bw0] = b.orientation

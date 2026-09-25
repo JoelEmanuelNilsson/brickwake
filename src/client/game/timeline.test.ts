@@ -16,6 +16,10 @@ const ship = (x: number, yaw: number): ShipSnapshot => ({
   sailSet: 1,
   hp: 100,
   reloadedAt: [0, 0],
+  life: { _tag: "afloat" },
+  spawn: 1,
+  kills: 0,
+  deaths: 0,
 })
 
 describe("SnapshotTimeline", () => {

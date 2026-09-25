@@ -366,6 +366,84 @@ export class Effects {
     }
   }
 
+  /**
+   * A foundering hull at deck point (x, y, z) over water at `water`: black smoke and embers from the deck while it is above
+   * the sea, churned foam and air boiling up where the hull meets the water. `intensity` 0–1 scales it.
+   */
+  founder(x: number, y: number, z: number, water: number, intensity: number): void {
+    const p = this.#p
+    if (y > water + 0.3) {
+      this.#at(x + jitter(1.5), y + random(0, 1), z + jitter(1.5))
+      const tone = random(0.08, 0.16)
+      this.#look(jitter(1), random(2, 4), jitter(1), random(2, 3), random(10, 16), random(6, 9), tone, tone * 0.95, tone * 0.9, 0.85 * intensity)
+      this.#drift(0.8, 0.55, -1.2)
+      this.smoke.emit(p)
+      if (Math.random() < 0.5 * intensity) {
+        this.#at(x + jitter(1.5), y + 0.4, z + jitter(1.5))
+        this.#look(jitter(2), random(3, 7), jitter(2), 0.1, 0.04, random(0.6, 1.2), 8, 3.6, 1, 1)
+        p.gravity = 4
+        p.shape = ParticleShape.streak
+        this.sparks.emit(p)
+        this.#at(x, y + 0.3, z)
+        this.#look(0, random(1, 2), 0, random(1.2, 2), random(2.5, 4), random(0.25, 0.4), 4.5, 2, 0.6, 0.9)
+        p.rotation = Math.random() * Math.PI * 2
+        this.fire.emit(p)
+      }
+    }
+    for (let i = 0; i < 3; i++) {
+      this.#at(x + jitter(4), water + 0.1, z + jitter(4))
+      this.#look(jitter(1), random(1.5, 4) * intensity, jitter(1), random(0.6, 1.2), random(1.5, 3), random(0.8, 1.4), 1.2, 1.25, 1.3, 0.55)
+      p.gravity = 9.81
+      p.drag = 0.6
+      this.spray.emit(p)
+    }
+    this.#at(x + jitter(3), water, z + jitter(3))
+    this.#look(0, 0, 0, random(2, 4), random(7, 11), random(3, 5), 0.92, 0.96, 0.98, 0.7 * intensity)
+    p.shape = ParticleShape.flat
+    p.rotation = Math.random() * Math.PI * 2
+    p.spin = jitter(0.2)
+    this.foam.emit(p)
+  }
+
+  /** The hull slips under at (x, y, z): the sea closes over it in a heave of spray, a ring of foam and a last breath of steam. */
+  plunge(x: number, y: number, z: number): void {
+    const p = this.#p
+    for (let i = 0; i < 40; i++) {
+      const angle = Math.random() * Math.PI * 2
+      const out = random(2, 9)
+      this.#at(x + Math.cos(angle) * random(1, 8), y + 0.2, z + Math.sin(angle) * random(1, 8))
+      this.#look(Math.cos(angle) * out, random(5, 14), Math.sin(angle) * out, random(1.5, 2.8), random(5, 9), random(1.6, 2.8), 1.35, 1.4, 1.45, 0.85)
+      p.gravity = 9.81
+      p.drag = 0.3
+      p.windShare = 0.3
+      p.shape = ParticleShape.streak
+      this.spray.emit(p)
+    }
+    for (let i = 0; i < 60; i++) {
+      const angle = Math.random() * Math.PI * 2
+      const out = random(4, 12)
+      this.#at(x + Math.cos(angle) * 3, y + 0.3, z + Math.sin(angle) * 3)
+      this.#look(Math.cos(angle) * out, random(4, 13), Math.sin(angle) * out, random(0.25, 0.5), 0.2, 3, 1.3, 1.35, 1.4, 0.9)
+      p.gravity = 9.81
+      p.shape = ParticleShape.streak
+      this.droplets.emit(p)
+    }
+    for (let i = 0; i < 8; i++) {
+      this.#at(x + jitter(6), y + random(0.5, 3), z + jitter(6))
+      this.#look(jitter(1), random(1, 2.5), jitter(1), 4, random(14, 20), random(4, 6), 1.0, 1.03, 1.06, 0.35)
+      this.#drift(0.8, 0.8, 0)
+      this.spray.emit(p)
+    }
+    for (let i = 0; i < 4; i++) {
+      this.#at(x + jitter(4), y, z + jitter(4))
+      this.#look(0, 0, 0, random(6, 9), random(22, 30), random(7, 10), 0.9, 0.95, 0.97, 0.8)
+      p.shape = ParticleShape.flat
+      p.rotation = Math.random() * Math.PI * 2
+      p.spin = jitter(0.08)
+      this.foam.emit(p)
+    }
+  }
+
   /** A faint wisp behind a ball in flight, so the arc reads at range. */
   trail(x: number, y: number, z: number): void {
     this.#at(x, y, z)

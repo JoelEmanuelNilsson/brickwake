@@ -16,7 +16,8 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js"
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js"
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js"
 import type { ScenarioName } from "../../sim/scenarios.ts"
-import type { ServerEvent, ServerMessage, WindSnapshot } from "../../protocol/messages.ts"
+import type { ClientMessage, MatchPhaseSnapshot, ServerEvent, ServerMessage, WindSnapshot } from "../../protocol/messages.ts"
+import { ffaRules } from "../../sim/rules.ts"
 import { createSunsetSky } from "../lab/sky.ts"
 import { GameAudio } from "./audio.ts"
 import { ChaseCamera } from "./chase-camera.ts"
@@ -26,10 +27,13 @@ import { installDebugHook } from "./debug-hook.ts"
 import { Effects } from "./effects.ts"
 import { FrameStats } from "./frame-stats.ts"
 import { Gunnery } from "./gunnery.ts"
+import { HitIndicator } from "./hit-indicator.ts"
 import { Hud, type HudReading } from "./hud.ts"
+import { MatchHud, type MatchReading } from "./match-hud.ts"
 import { OceanSurface } from "./ocean.ts"
 import { Reticle } from "./reticle.ts"
 import { ShipView } from "./ship-view.ts"
+import { SinkingShips } from "./sinking.ts"
 import { EventQueue, SnapshotTimeline } from "./timeline.ts"
 
 /** What every render-loop hook sees for one frame. One object, rewritten each frame. */
@@ -54,6 +58,10 @@ export interface GameElements {
   readonly overlay: HTMLElement
   readonly status: HTMLElement
   readonly reticle: HTMLElement
+  /** Match layer: clock, kill feed, hull and guns, banners, scoreboard. */
+  readonly match: HTMLElement
+  /** Hit-direction arcs around the reticle. */
+  readonly hits: HTMLElement
 }
 
 /** Sky colours in linear HDR, equal to the lab sky dome's constants so water, fog and sky meet without a seam. */
@@ -94,6 +102,11 @@ export class Game {
   #camera: ChaseCamera | undefined
   #controls: Controls | undefined
   readonly #hud: Hud
+  readonly #matchHud: MatchHud
+  readonly #hitIndicator: HitIndicator
+  readonly #sinking: SinkingShips
+  #phase: MatchPhaseSnapshot = { _tag: "warmup", endsAt: 0 }
+  readonly #matchReading: MatchReading
   /** Gun and impact effects; later systems (debris, sinking) add their own through it. */
   readonly effects: Effects
   readonly #gunnery: Gunnery
@@ -114,7 +127,12 @@ export class Game {
   constructor(
     canvas: HTMLCanvasElement,
     elements: GameElements,
-    options: { readonly scenario: ScenarioName | undefined; readonly pixelRatio: number; readonly orbit: number },
+    options: {
+      readonly scenario: ScenarioName | undefined
+      readonly room: string | undefined
+      readonly pixelRatio: number
+      readonly orbit: number
+    },
   ) {
     this.canvas = canvas
     this.elements = elements
@@ -127,6 +145,9 @@ export class Game {
     this.#composer = new EffectComposer(this.renderer, new WebGLRenderTarget(1, 1, { type: HalfFloatType, samples: 4 }))
     this.#stats = new FrameStats(this.renderer)
     this.#hud = new Hud(elements.hud)
+    this.#matchHud = new MatchHud(elements.match)
+    this.#matchReading = { dt: 0, renderTime: 0, rules: ffaRules, phase: this.#phase, ownId: "", own: undefined, ships: this.#ships }
+    this.#hitIndicator = new HitIndicator(elements.hits)
 
     this.scene.fog = new FogExp2(sky.horizon.getHex(), fogDensity)
     this.scene.fog.color.copy(sky.horizon)
@@ -150,7 +171,9 @@ export class Game {
       send: (message) => this.#connection.send(message),
       ownId: () => this.#shipId,
     })
+    this.#sinking = new SinkingShips(this.effects)
     this.eventHandlers.push((event) => this.#gunnery.onEvent(event))
+    this.eventHandlers.push((event) => this.#onMatchEvent(event))
 
     window.addEventListener("resize", () => this.#resize())
     elements.overlay.addEventListener("click", () => this.#setSail())
@@ -162,7 +185,13 @@ export class Game {
     this.#connection = connect({
       onOpen: () => {
         this.#status("joining")
-        this.#connection.send(options.scenario === undefined ? { _tag: "join", mode: "ffa" } : { _tag: "join", mode: "ffa", scenario: options.scenario })
+        const join: ClientMessage =
+          options.scenario === undefined
+            ? { _tag: "join", mode: "ffa" }
+            : options.room === undefined
+              ? { _tag: "join", mode: "ffa", scenario: options.scenario }
+              : { _tag: "join", mode: "ffa", scenario: options.scenario, room: options.room }
+        this.#connection.send(join)
       },
       onMessage: (message, arrival) => this.#receive(message, arrival),
       onClose: () => this.#status("closed"),
@@ -182,6 +211,8 @@ export class Game {
       sea: () => this.#ocean?.sea,
       gunnery: () => this.#gunnery,
       effects: () => this.effects,
+      match: () => this.#matchReading,
+      matchHud: () => this.#matchHud,
     })
     this.#resize()
     this.renderer.setAnimationLoop((ms) => this.#renderFrame(ms))
@@ -210,6 +241,8 @@ export class Game {
       case "welcome": {
         this.#shipId = message.shipId
         this.#wind = message.wind
+        this.#matchReading.rules = message.rules
+        this.#phase = message.phase
         this.#timeline = new SnapshotTimeline(message.simHz)
         this.#timeline.push(message.tick, message.ships, arrival)
         this.#events = new EventQueue<ServerEvent>()
@@ -233,6 +266,7 @@ export class Game {
       }
       case "snapshot": {
         this.#wind = message.wind
+        this.#phase = message.phase
         this.#timeline?.push(message.tick, message.ships, arrival)
         this.#events.push(message.events)
         return
@@ -241,6 +275,19 @@ export class Game {
         console.warn(`server rejected a message: ${message.reason}`)
         return
     }
+  }
+
+  #onMatchEvent(event: ServerEvent) {
+    this.#matchHud.onEvent(event)
+    if (event._tag === "shipRespawned" && event.shipId === this.#shipId) this.#controls?.syncSail(0)
+    if (event._tag !== "ballHit" || event.target !== this.#shipId) return
+    const own = this.#ships.get(event.target)?.view.pose
+    const shooter = this.#ships.get(event.shooter)?.view.pose
+    // From the shooter when it is in view, else back along the ball's line into the hull.
+    const [x, , z] = event.point
+    const fromX = shooter === undefined ? x - (own?.x ?? x) : shooter.x - (own?.x ?? 0)
+    const fromZ = shooter === undefined ? z - (own?.z ?? z) : shooter.z - (own?.z ?? 0)
+    this.#hitIndicator.hit(Math.atan2(-fromZ, fromX))
   }
 
   #resize() {
@@ -284,14 +331,18 @@ export class Game {
         this.scene.add(entry.view.group)
       }
       entry.seen = this.#frameCount
-      if (timeline.sample(id, entry.view.pose)) entry.view.update(entry.view.pose, this.#wind.toward)
+      if (timeline.sample(id, entry.view.pose)) {
+        entry.view.update(entry.view.pose, this.#wind.toward)
+        entry.view.group.visible = this.#sinking.update(id, entry.view.pose, dt, renderTime, ocean.sea, camera)
+      }
     }
     this.#ships.forEach(this.#sweep)
 
     const own = this.#shipId === null ? undefined : this.#ships.get(this.#shipId)
     if (own !== undefined) {
       const pose = own.view.pose
-      camera.follow(pose.x, pose.y, pose.z, dt)
+      // A foundering ship drags the camera no lower than the sea surface: the captain watches it go.
+      camera.follow(pose.x, pose.life === "afloat" ? pose.y : Math.max(pose.y, 0), pose.z, dt)
       const forwardX = 1 - 2 * (pose.qy * pose.qy + pose.qz * pose.qz)
       const forwardZ = 2 * (pose.qx * pose.qz - pose.qw * pose.qy)
       const flat = Math.hypot(forwardX, forwardZ)
@@ -309,7 +360,19 @@ export class Game {
     }
     ocean.update(renderTime, camera.camera.position.x, camera.camera.position.z)
     camera.camera.updateMatrixWorld()
-    this.#gunnery.update(dt, renderTime, own?.view.pose, camera, ocean.sea, this.#sailing)
+    const manned = own !== undefined && own.view.pose.life === "afloat" && this.#phase._tag !== "ended"
+    this.#gunnery.update(dt, renderTime, manned ? own.view.pose : undefined, camera, ocean.sea, this.#sailing)
+    if (this.#shipId !== null) {
+      const reading = this.#matchReading
+      reading.dt = dt
+      reading.renderTime = renderTime
+      reading.phase = this.#phase
+      reading.ownId = this.#shipId
+      reading.own = own?.view.pose
+      this.#matchHud.update(reading)
+      this.#matchHud.visible = this.#sailing
+    }
+    this.#hitIndicator.update(dt, camera.yaw + Math.PI)
     const windX = Math.cos(this.#wind.toward) * this.#wind.speed
     const windZ = -Math.sin(this.#wind.toward) * this.#wind.speed
     this.effects.update(dt, renderTime, windX, windZ, ocean.sea, camera.camera)

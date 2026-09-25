@@ -26,10 +26,10 @@ const connection = (socket: Socket.Socket, lag: NetworkLag) =>
 
     const act = (message: ClientMessage) =>
       ClientMessage.match(message, {
-        join: ({ mode, scenario }) =>
+        join: ({ _tag, ...request }) =>
           seat
             ? reject("already in a room; leave first")
-            : rooms.join(scenario === undefined ? { mode } : { mode, scenario }, send).pipe(
+            : rooms.join(request, send).pipe(
                 Effect.tap((joined) => Effect.sync(() => (seat = joined))),
                 Effect.uninterruptible,
               ),

@@ -104,16 +104,82 @@
       .reticle-status { top: 72px; font-size: 13px; color: var(--tone); }
       #reticle.denied { animation: deny 260ms ease-in-out; }
       @keyframes deny { 20%, 60% { transform: translateX(-6px); } 40%, 80% { transform: translateX(6px); } }
+      #match { position: fixed; inset: 0; pointer-events: none; user-select: none; color: var(--ink); font-variant-numeric: tabular-nums; }
+      #match[hidden] { display: none; }
+      #match[data-phase="ended"]::before { content: ""; position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 50%, rgba(8, 12, 16, 0.15), rgba(8, 12, 16, 0.6)); }
+      .mh-clock {
+        position: absolute; top: 18px; left: 50%; transform: translateX(-50%); min-width: 150px; padding: 7px 22px 8px; text-align: center;
+        background: var(--panel); border: 1px solid var(--edge); border-radius: 10px; backdrop-filter: blur(6px); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+      }
+      .mh-phase { font-size: 11px; letter-spacing: 0.28em; text-transform: uppercase; color: var(--gold); }
+      .mh-time { font-size: 30px; font-weight: 600; line-height: 1.15; letter-spacing: 0.04em; transition: color 200ms; }
+      .mh-time[data-low="true"] { color: #e36b4f; }
+      .mh-standing { font-size: 12px; letter-spacing: 0.12em; color: var(--dim); }
+      .mh-standing:empty { display: none; }
+      .mh-feed { position: absolute; top: 18px; right: 22px; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+      .mh-feed-line {
+        display: flex; align-items: baseline; gap: 9px; padding: 5px 13px; font-size: 15px; letter-spacing: 0.04em;
+        background: var(--panel); border: 1px solid rgba(233, 180, 76, 0.14); border-radius: 6px; backdrop-filter: blur(6px);
+        animation-name: feed; animation-timing-function: linear; animation-fill-mode: forwards;
+      }
+      .mh-feed-line[data-own="won"] { border-color: rgba(233, 180, 76, 0.5); }
+      .mh-feed-line[data-own="lost"] { border-color: rgba(227, 107, 79, 0.55); }
+      .mh-skull { color: var(--gold); font-size: 14px; opacity: 0.9; }
+      .mh-feed-line[data-own="lost"] .mh-skull { color: #e36b4f; }
+      .mh-you { color: var(--gold); font-weight: 600; }
+      @keyframes feed { 0% { opacity: 0; transform: translateX(14px); } 4% { opacity: 1; transform: none; } 86% { opacity: 1; } 100% { opacity: 0; } }
+      .mh-ship { position: absolute; right: 22px; bottom: 22px; width: 190px; }
+      .mh-ship .hud-label { display: inline-block; }
+      .mh-hull-value { float: right; margin-top: -3px; font-size: 20px; font-weight: 600; }
+      .mh-hull { clear: both; height: 9px; border-radius: 3px; background: rgba(243, 233, 214, 0.12); overflow: hidden; }
+      .mh-hull-fill { height: 100%; transform-origin: left; background: linear-gradient(90deg, #a87a2a, var(--gold)); transition: transform 250ms ease-out; }
+      .mh-hull-fill[data-level="hurt"] { background: linear-gradient(90deg, #a24e24, #e0913f); }
+      .mh-hull-fill[data-level="critical"] { background: linear-gradient(90deg, #7e2418, #e36b4f); animation: breathe 0.9s ease-in-out infinite; }
+      .mh-guns-label { margin-top: 12px; }
+      .mh-gun { display: flex; align-items: center; gap: 10px; margin-top: 4px; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); }
+      .mh-gun span { width: 36px; }
+      .mh-gun-bar { flex: 1; height: 5px; border-radius: 2px; background: rgba(243, 233, 214, 0.12); overflow: hidden; }
+      .mh-gun-fill { height: 100%; transform-origin: left; background: var(--ink); opacity: 0.7; }
+      .mh-gun-fill[data-ready="true"] { background: var(--gold); opacity: 1; box-shadow: 0 0 6px rgba(233, 180, 76, 0.7); }
+      .mh-banner { position: absolute; left: 50%; top: 24%; transform: translateX(-50%); text-align: center; white-space: nowrap; text-shadow: 0 2px 18px rgba(0, 0, 0, 0.8), 0 1px 3px rgba(0, 0, 0, 0.9); }
+      .mh-banner[hidden], #match:has(.mh-board:not([hidden])) .mh-banner { display: none; }
+      .mh-banner-title { font-size: 40px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; color: var(--gold); }
+      .mh-banner[data-tone="danger"] .mh-banner-title { color: #e36b4f; }
+      .mh-banner-sub { margin-top: 8px; font-size: 14px; letter-spacing: 0.26em; text-transform: uppercase; }
+      .mh-board {
+        position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); min-width: 440px; padding: 22px 30px 18px; text-align: center;
+        background: rgba(10, 16, 20, 0.84); border: 1px solid var(--edge); border-radius: 12px; backdrop-filter: blur(10px); box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+      }
+      .mh-board[hidden] { display: none; }
+      .mh-board-verdict { font-size: 54px; font-weight: 600; letter-spacing: 0.2em; line-height: 1.1; text-transform: uppercase; color: var(--gold); text-shadow: 0 4px 30px rgba(233, 180, 76, 0.25); }
+      .mh-board[data-verdict="defeat"] .mh-board-verdict { color: #e36b4f; text-shadow: 0 4px 30px rgba(227, 107, 79, 0.25); }
+      .mh-board[data-verdict="draw"] .mh-board-verdict { color: var(--ink); }
+      .mh-board[data-verdict="none"] .mh-board-verdict { display: none; }
+      .mh-board-title { margin: 6px 0 14px; font-size: 11px; letter-spacing: 0.28em; text-transform: uppercase; color: var(--gold); }
+      .mh-board table { width: 100%; border-collapse: collapse; font-size: 17px; }
+      .mh-board th { padding: 4px 10px; font-size: 10px; font-weight: normal; letter-spacing: 0.22em; text-transform: uppercase; color: var(--dim); text-align: right; }
+      .mh-board td { padding: 7px 10px; text-align: right; border-top: 1px solid rgba(243, 233, 214, 0.08); }
+      .mh-board td:first-child { color: var(--dim); width: 24px; }
+      .mh-board .mh-name { text-align: left; }
+      .mh-board tr.mh-own td { color: var(--gold); background: rgba(233, 180, 76, 0.08); }
+      .mh-board-foot { margin-top: 16px; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--dim); }
+
+      #hits { position: fixed; left: 50%; top: 50%; width: 280px; height: 280px; margin: -140px 0 0 -140px; pointer-events: none; }
+      .hitdir { position: absolute; inset: 0; opacity: 0; }
+      .hitdir svg { width: 100%; height: 100%; overflow: visible; }
+      .hitdir path { fill: rgba(232, 84, 58, 0.88); filter: drop-shadow(0 0 7px rgba(232, 84, 58, 0.85)); }
     </style>
   </head>
   <body>
     <canvas id="scene"></canvas>
     <div id="hud" hidden></div>
     <div id="reticle" hidden></div>
+    <div id="hits"></div>
+    <div id="match" hidden></div>
     <div id="overlay" data-state="connecting">
       <h1>BRICKWAKE</h1>
       <div class="overlay-hint">Click to set sail</div>
-      <div class="overlay-keys">W / S sail · A / D rudder · mouse to look and aim · click to fire · wheel to zoom</div>
+      <div class="overlay-keys">W / S sail · A / D rudder · mouse to look and aim · click to fire · wheel to zoom · Tab scoreboard</div>
     </div>
     <div id="status"></div>
     <script type="module" src="/src/client/main.ts"></script>

@@ -43,6 +43,17 @@ export interface ShipControls {
 }
 
 /**
+ * Where a ship is in its life. `sinking`: buoyancy fades from the `floodEnd` (+1 bow, −1 stern) aft or forward, the
+ * ship takes no orders and cannot be hit. `sunk`: under water, out of play until `respawnAt` (sim seconds).
+ */
+export type ShipLife =
+  | { readonly _tag: "afloat" }
+  | { readonly _tag: "sinking"; readonly since: number; readonly floodEnd: 1 | -1 }
+  | { readonly _tag: "sunk"; readonly respawnAt: number }
+
+const afloat: ShipLife = { _tag: "afloat" }
+
+/**
  * One ship's rigid body and rig. Ship-local axes: +x bow, +y up, +z starboard; the origin is on the
  * centreline, midships, at the design waterline.
  */
@@ -65,6 +76,12 @@ export interface ShipState {
   readonly hp: number
   /** Sim time, seconds, from which each side's guns may fire again. */
   readonly reloadedAt: { readonly port: number; readonly starboard: number }
+  readonly life: ShipLife
+  /** Times this ship has entered the match: 1 on join, +1 per respawn or restart. A change means it moved without sailing there. */
+  readonly spawn: number
+  /** Enemy ships this captain has sunk, and times this ship was sunk, this match. */
+  readonly kills: number
+  readonly deaths: number
 }
 
 /** Heading, pitch and heel of a ship, in radians. */
@@ -101,7 +118,21 @@ export const makeShip = (
   sailSet: tuning.sail.setByLevel[options.controls?.sail ?? 0],
   hp: tuning.damage.hullHp,
   reloadedAt: { port: 0, starboard: 0 },
+  life: afloat,
+  spawn: 1,
+  kills: 0,
+  deaths: 0,
 })
+
+/** Share of a buoyancy column at ship-local `x` still afloat at `time`: the flooding end loses it first, the far end last. */
+export const buoyancyKept = (life: ShipLife, x: number, time: number): number => {
+  if (life._tag === "afloat") return 1
+  if (life._tag === "sunk") return 0
+  const { floodSeconds, floodSpread } = tuning.sinking
+  const toward = Math.max(-1, Math.min(1, (x * life.floodEnd) / (tuning.hull.hitBox.length / 2)))
+  const flooded = (time - life.since - ((1 - toward) / 2) * floodSpread) / floodSeconds
+  return 1 - Math.max(0, Math.min(1, flooded))
+}
 
 /** Applies an instantaneous world impulse (N·s) at a ship-local point, with the same added mass the body integrates with. */
 export const applyImpulse = (ship: ShipState, local: Vec3, impulse: Vec3, hull: Hull = defaultHull): ShipState => {
@@ -174,6 +205,8 @@ const bodyStep = (ship: ShipState, env: ShipEnvironment, hull: Hull, time: numbe
   const dampingPerArea = (tuning.hull.columnDampingRatio * criticalHeaveDamping) / hull.waterplaneArea
   let wetArea = 0
   let waterRise = 0
+  // Flooded hull moves with the water it holds, so it loses the surface's damping along with its buoyancy.
+  let keptArea = 0
   for (const column of hull.columns) {
     const bottom = toWorld(column.bottom)
     const water = sampleOcean(env.sea, bottom.x, bottom.z, time)
@@ -182,8 +215,9 @@ const bodyStep = (ship: ShipState, env: ShipEnvironment, hull: Hull, time: numbe
       const center = toWorld(vec3(column.bottom.x, column.bottom.y + submerged / 2, column.bottom.z))
       const relativeRise = velocityAt(center).y - water.velocity.y
       // Damping fades in over the first half metre so a column touching the surface cannot chatter.
-      const wet = Math.min(1, submerged / 0.5)
-      applyAt(center, vec3(0, column.area * (waterDensity * gravity * submerged - dampingPerArea * relativeRise * wet), 0))
+      const kept = buoyancyKept(ship.life, column.bottom.x, time)
+      const wet = Math.min(1, submerged / 0.5) * kept
+      applyAt(center, vec3(0, column.area * (waterDensity * gravity * submerged * kept - dampingPerArea * relativeRise * wet), 0))
       wetArea += column.area * wet
       waterRise += column.area * wet * water.velocity.y
     }
@@ -193,7 +227,14 @@ const bodyStep = (ship: ShipState, env: ShipEnvironment, hull: Hull, time: numbe
     applyAt(com, vec3(0, -heaveDamping * (ship.velocity.y - waterRise / wetArea), 0))
   }
 
+  for (const column of hull.columns) keptArea += column.area * buoyancyKept(ship.life, column.bottom.x, time)
+
   const water = sampleOcean(env.sea, ship.position.x, ship.position.z, time).velocity
+  const surfaceShare = keptArea / hull.waterplaneArea
+  if (surfaceShare < 1) {
+    const sink = ship.velocity.y - water.y
+    applyAt(com, vec3(0, -tuning.sinking.drag * (1 - surfaceShare) * sink * Math.abs(sink), 0))
+  }
   const localFlow = (local: Vec3) => rotateInverse(q, sub(velocityAt(toWorld(local)), water))
   const r = tuning.resistance
 
@@ -235,9 +276,9 @@ const bodyStep = (ship: ShipState, env: ShipEnvironment, hull: Hull, time: numbe
   const bodyTorque = add(
     rotateInverse(q, torque),
     vec3(
-      -tuning.hull.rollDamping * bodyOmega.x,
+      -tuning.hull.rollDamping * surfaceShare * bodyOmega.x,
       -(r.yawLinear * bodyOmega.y + r.yawQuadratic * bodyOmega.y * Math.abs(bodyOmega.y)),
-      -tuning.hull.pitchDamping * bodyOmega.z,
+      -tuning.hull.pitchDamping * surfaceShare * bodyOmega.z,
     ),
   )
 

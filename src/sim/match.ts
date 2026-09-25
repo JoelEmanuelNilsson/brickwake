@@ -1,7 +1,9 @@
+import { collideShips } from "./collision.ts"
 import { gunLayout, type BroadsideSide } from "./gun-layout.ts"
 import { ballId, broadsideRefusal, fireGun, traceBall, type BallId, type BroadsideRefusal, type Cannonball } from "./gunnery.ts"
 import type { SeaState } from "./ocean.ts"
 import { seedRng, type RngState } from "./rng.ts"
+import { ffaRules, openingPhase, scoreLimitReached, scoreSink, winnerOf, type MatchPhase, type MatchRules } from "./rules.ts"
 import { makeShip, stepShip, type ShipControls, type ShipId, type ShipState } from "./ship.ts"
 import { SIM_DT, tuning } from "./tuning.ts"
 import type { Vec3 } from "./vector.ts"
@@ -10,6 +12,8 @@ import { stepWind, type Wind } from "./wind.ts"
 /** Everything that decides a match's outcome. Replays exactly from its seed and the inputs per tick. */
 export interface MatchState {
   readonly tick: number
+  readonly rules: MatchRules
+  readonly phase: MatchPhase
   readonly rng: RngState
   readonly sea: SeaState
   readonly wind: Wind
@@ -68,6 +72,10 @@ export type MatchEvent =
       readonly hp: number
     }
   | { readonly _tag: "ballSplash"; readonly tick: number; readonly time: number; readonly ballId: BallId; readonly point: Vec3 }
+  /** A ship's HP reached 0 at `time`; it founders. `by` is the ship whose ball did it. */
+  | { readonly _tag: "shipSunk"; readonly tick: number; readonly time: number; readonly shipId: ShipId; readonly by: ShipId | undefined }
+  /** A ship re-entered the match on the spawn ring: after sinking, or at a restart. */
+  | { readonly _tag: "shipRespawned"; readonly tick: number; readonly shipId: ShipId }
 
 /** Controls received this tick, by ship. Ships without an entry keep their last controls. */
 export type ShipInputs = ReadonlyMap<ShipId, ShipControls>
@@ -116,15 +124,18 @@ export const spawnPoint = (state: MatchState, id: ShipId): ShipSpawn => {
   return { id, x: radius * Math.cos(angle), z: radius * Math.sin(angle), heading: state.wind.baseToward + Math.PI / 2 }
 }
 
-/** A match at tick 0. */
+/** A match at tick 0, in warmup or, when `rules` has none, in play. Rules default to FFA quick play. */
 export const createMatch = (options: {
   readonly seed: number
+  readonly rules?: MatchRules
   readonly sea: SeaState
   readonly wind: Wind
   readonly ships: ReadonlyArray<ShipSpawn>
 }): MatchState =>
   options.ships.reduce(addShip, {
     tick: 0,
+    rules: options.rules ?? ffaRules,
+    phase: openingPhase(options.rules ?? ffaRules, 0),
     rng: seedRng(options.seed),
     sea: options.sea,
     wind: options.wind,
@@ -141,9 +152,20 @@ const gunsBySide = {
   starboard: gunLayout.flatMap((gun, index) => (gun.side === "starboard" ? [index] : [])),
 }
 
+const isAfloat = (ship: ShipState) => ship.life._tag === "afloat"
+const isAbove = (ship: ShipState) => ship.life._tag !== "sunk"
+
+/** The ship back on the spawn ring at `time`, clear of every ship still above water, keeping its score. */
+const respawn = (state: MatchState, ships: ReadonlyArray<ShipState>, ship: ShipState, time: number): ShipState => {
+  const clear = ships.filter((other) => other.id !== ship.id && isAbove(other))
+  const fresh = makeShip(spawnPoint({ ...state, ships: clear }, ship.id), state.sea, time)
+  return { ...fresh, spawn: ship.spawn + 1, kills: ship.kills, deaths: ship.deaths }
+}
+
 /**
  * Advances a match by one fixed 30 Hz tick (`SIM_DT`). Pure. Order: helm and sail inputs, broadside orders, guns
- * due in the ripple fire (with recoil), ships move, balls fly and hit or splash, wind.
+ * due in the ripple fire (with recoil), ships move and push apart, balls fly and hit or splash, sinks score, sinking
+ * ships go under and sunk ones respawn, the match phase advances, wind.
  */
 export const stepMatch = (
   state: MatchState,
@@ -153,11 +175,13 @@ export const stepMatch = (
   const start = matchTime(state)
   const end = start + SIM_DT
   const events: Array<MatchEvent> = []
-  const pending: Array<PendingShot> = [...state.pendingShots]
+  let pending: Array<PendingShot> = [...state.pendingShots]
+  const gunsManned = state.phase._tag !== "ended"
 
   let ships = state.ships.map((ship): ShipState => {
+    if (!isAfloat(ship)) return ship
     const controlled = { ...ship, controls: inputs.get(ship.id) ?? ship.controls }
-    const order = orders.get(ship.id)
+    const order = gunsManned ? orders.get(ship.id) : undefined
     if (!order) return controlled
     const reason = broadsideRefusal(controlled, order.side, order.aimPoint, start)
     if (reason) {
@@ -183,10 +207,16 @@ export const stepMatch = (
     balls.push(fired.ball)
     events.push({ _tag: "cannonFired", tick: state.tick, ball: fired.ball })
   }
+  pending = pending.filter((shot) => shot.at >= end)
 
   const env = { sea: state.sea, wind: state.wind, time: start }
-  const moved = ships.map((ship) => stepShip(ship, env))
-  const pairs = ships.map((ship, index) => [ship, moved[index]!] as const)
+  // Sunk hulls keep falling through the water until they respawn, so a ship never stops mid-plunge on screen.
+  let moved = collideShips(
+    ships.map((ship) => stepShip(ship, env)),
+    isAbove,
+  )
+  // A foundering hull still stops balls (they strike it for no damage); a sunk one is under the sea.
+  const pairs = ships.flatMap((ship, index) => (isAbove(ship) ? [[ship, moved[index]!] as const] : []))
   const flying: Array<Cannonball> = []
   for (const ball of balls) {
     const outcome = traceBall({ ball, sea: state.sea, from: Math.max(start, ball.firedAt), to: end, ships: pairs, tickStart: start })
@@ -200,8 +230,7 @@ export const stepMatch = (
     }
     const index = moved.findIndex((ship) => ship.id === outcome.target)
     const target = moved[index]!
-    const hp = Math.max(0, target.hp - tuning.damage.perBall)
-    moved[index] = { ...target, hp }
+    const hp = isAfloat(target) ? Math.max(0, target.hp - tuning.damage.perBall) : target.hp
     events.push({
       _tag: "ballHit",
       tick: state.tick,
@@ -214,18 +243,71 @@ export const stepMatch = (
       damage: target.hp - hp,
       hp,
     })
+    if (hp > 0 || !isAfloat(target)) {
+      moved = moved.with(index, { ...target, hp })
+      continue
+    }
+    // The end the killing ball struck floods first, so the ship goes down by the bow or the stern.
+    const floodEnd = outcome.localPoint.x >= 0 ? 1 : -1
+    moved = moved.with(index, { ...target, hp, life: { _tag: "sinking", since: outcome.time, floodEnd }, controls: { rudder: 0, sail: 0 } })
+    pending = pending.filter((shot) => shot.shipId !== target.id)
+    const by = moved.some((ship) => ship.id === ball.shooter) ? ball.shooter : undefined
+    events.push({ _tag: "shipSunk", tick: state.tick, time: outcome.time, shipId: target.id, by })
+    if (state.phase._tag === "playing") moved = scoreSink(state.rules, moved, target.id, by)
+  }
+
+  const { seconds: sinkSeconds, respawnSeconds } = tuning.sinking
+  moved = moved.map((ship) =>
+    ship.life._tag === "sinking" && end >= ship.life.since + sinkSeconds
+      ? { ...ship, life: { _tag: "sunk", respawnAt: ship.life.since + sinkSeconds + respawnSeconds } }
+      : ship,
+  )
+  for (let index = 0; index < moved.length; index++) {
+    const ship = moved[index]!
+    if (ship.life._tag !== "sunk" || end < ship.life.respawnAt) continue
+    moved = moved.with(index, respawn(state, moved, ship, end))
+    events.push({ _tag: "shipRespawned", tick: state.tick, shipId: ship.id })
+  }
+
+  let phase = state.phase
+  let live = flying
+  switch (phase._tag) {
+    case "warmup":
+      if (end < phase.endsAt) break
+      phase = { _tag: "playing", endsAt: end + state.rules.timeLimit }
+      moved = moved.map((ship) => ({ ...ship, kills: 0, deaths: 0, hp: isAfloat(ship) ? tuning.damage.hullHp : ship.hp }))
+      break
+    case "playing":
+      if (end < phase.endsAt && !scoreLimitReached(state.rules, moved)) break
+      phase = { _tag: "ended", restartAt: end + state.rules.endedSeconds, winner: winnerOf(state.rules, moved) }
+      break
+    case "ended": {
+      if (end < phase.restartAt) break
+      phase = openingPhase(state.rules, end)
+      const placed: Array<ShipState> = []
+      for (const ship of moved) {
+        placed.push({ ...respawn(state, placed, ship, end), kills: 0, deaths: 0 })
+        events.push({ _tag: "shipRespawned", tick: state.tick, shipId: ship.id })
+      }
+      moved = placed
+      live = []
+      pending = []
+      break
+    }
   }
 
   const { wind, rng: windRng } = stepWind(state.wind, rng)
   return {
     state: {
       tick: state.tick + 1,
+      rules: state.rules,
+      phase,
       rng: windRng,
       sea: state.sea,
       wind,
       ships: moved,
-      balls: flying,
-      pendingShots: pending.filter((shot) => shot.at >= end),
+      balls: live,
+      pendingShots: pending,
       nextBallId,
     },
     events,
